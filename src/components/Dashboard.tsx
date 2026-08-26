@@ -6,6 +6,8 @@ import AllIncidentsPage from '@/pages/AllIncidentsPage';
 import ByAgentPage from '@/pages/ByAgentPage';
 import ByGroupPage from '@/pages/ByGroupPage';
 import TrendsPage from '@/pages/TrendsPage';
+import WeeklyPage from '@/pages/WeeklyPage';
+import ProblemsPage from '@/pages/ProblemsPage';
 
 export default function Dashboard() {
   const { currentPage } = useAppContext();
@@ -13,6 +15,8 @@ export default function Dashboard() {
   const renderPage = () => {
     switch (currentPage) {
       case 'overview': return <OverviewPage />;
+      case 'weekly': return <WeeklyPage />;
+      case 'problems': return <ProblemsPage />;
       case 'trends': return <TrendsPage />;
       case 'textquality': return <TextQualityPage />;
       case 'incidents': return <AllIncidentsPage />;

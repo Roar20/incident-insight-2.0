@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import type { EnrichedIncident } from '@/lib/parser';
 import type { IncidentScore } from '@/lib/scorer';
 import type { OverviewStats, DimStats, FeedbackItem, AgentStat, GroupStat } from '@/lib/analytics';
 import {
   computeOverview, computeDimStats, computeFeedback,
   computeAgentStats, computeGroupStats, parseMonthKey, monthLabel,
 } from '@/lib/analytics';
+import type { AnnotatedIncident, ProblemCluster, CategoryStat, ProblemAction } from '@/lib/problems';
+import { computeProblemClusters, computeCategoryStats, recommendActions } from '@/lib/problems';
+import { computePeriodTrends, type PeriodTrend } from '@/lib/trends';
+import { availableWeeks } from '@/lib/weekly';
 import type { WorkerMessage } from '@/workers/scoringWorker';
 
 export interface MonthOption {
@@ -14,7 +17,7 @@ export interface MonthOption {
 }
 
 interface AppState {
-  incidents: EnrichedIncident[];
+  incidents: AnnotatedIncident[];
   scores: IncidentScore[];
   overview: OverviewStats | null;
   dimStats: DimStats[];
@@ -30,6 +33,8 @@ interface AppState {
   fileName: string;
   availableMonths: MonthOption[];
   selectedMonths: string[];
+  availableWeeks: string[];
+  selectedWeek: string;
 }
 
 interface AppContextType extends AppState {
@@ -37,13 +42,19 @@ interface AppContextType extends AppState {
   setCurrentPage: (page: string) => void;
   setFilterLabel: (label: string) => void;
   setSelectedMonths: (months: string[]) => void;
-  filteredIncidents: EnrichedIncident[];
+  setSelectedWeek: (week: string) => void;
+  filteredIncidents: AnnotatedIncident[];
   filteredScores: IncidentScore[];
   filteredOverview: OverviewStats | null;
   filteredDimStats: DimStats[];
   filteredFeedbackItems: FeedbackItem[];
   filteredAgentStats: AgentStat[];
   filteredGroupStats: GroupStat[];
+  filteredProblems: ProblemCluster[];
+  filteredCategories: CategoryStat[];
+  filteredActions: ProblemAction[];
+  weeklyTrends: PeriodTrend[];
+  monthlyTrends: PeriodTrend[];
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -72,6 +83,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     fileName: '',
     availableMonths: [],
     selectedMonths: [],
+    availableWeeks: [],
+    selectedWeek: '',
   });
 
   // Tracked so an in-flight parse can be torn down when a second file is
@@ -129,12 +142,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             label: monthLabel(key),
           }));
 
+          const weeks = availableWeeks(incidents);
+
           setState(prev => ({
             ...prev,
             incidents, scores, overview, dimStats, feedbackItems,
             agentStats, groupStats, loaded: true, loading: false,
             fileName: name, currentPage: 'overview',
             availableMonths, selectedMonths: [],
+            // Default the weekly review to the most recent complete week of data.
+            availableWeeks: weeks, selectedWeek: weeks[weeks.length - 1] ?? '',
             loadingProgress: 100, loadingMessage: '',
           }));
           stopWorker();
@@ -188,6 +205,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, selectedMonths: months }));
   }, []);
 
+  const setSelectedWeek = useCallback((week: string) => {
+    setState(prev => ({ ...prev, selectedWeek: week }));
+  }, []);
+
   // When no month is selected the filtered views are just the precomputed
   // whole-dataset stats. When a month *is* selected the stats are always
   // recomputed from that subset — including when the subset is empty, so an
@@ -226,13 +247,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isMonthFiltered ? computeGroupStats(filteredIncidents, filteredScores) : state.groupStats,
     [isMonthFiltered, filteredIncidents, filteredScores, state.groupStats]);
 
+  // Clustering already happened in the worker, so these only regroup by the
+  // cluster id each incident carries — cheap enough to redo per filter change.
+  const filteredProblems = useMemo(() =>
+    computeProblemClusters(filteredIncidents, filteredScores),
+    [filteredIncidents, filteredScores]);
+
+  const filteredCategories = useMemo(() =>
+    computeCategoryStats(filteredIncidents, filteredScores),
+    [filteredIncidents, filteredScores]);
+
+  const filteredActions = useMemo(() =>
+    recommendActions(filteredProblems, filteredIncidents.length),
+    [filteredProblems, filteredIncidents.length]);
+
+  // Trends deliberately span the whole dataset: a trend over a filtered slice of
+  // months is not a trend.
+  const weeklyTrends = useMemo(() =>
+    computePeriodTrends(state.incidents, state.scores, 'week'),
+    [state.incidents, state.scores]);
+
+  const monthlyTrends = useMemo(() =>
+    computePeriodTrends(state.incidents, state.scores, 'month'),
+    [state.incidents, state.scores]);
+
   return (
     <AppContext.Provider value={{
       ...state,
-      loadFile, setCurrentPage, setFilterLabel, setSelectedMonths,
+      loadFile, setCurrentPage, setFilterLabel, setSelectedMonths, setSelectedWeek,
       filteredIncidents, filteredScores,
       filteredOverview, filteredDimStats, filteredFeedbackItems,
       filteredAgentStats, filteredGroupStats,
+      filteredProblems, filteredCategories, filteredActions,
+      weeklyTrends, monthlyTrends,
     }}>
       {children}
     </AppContext.Provider>

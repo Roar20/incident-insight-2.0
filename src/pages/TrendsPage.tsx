@@ -1,6 +1,6 @@
 import { useAppContext } from '@/context/AppContext';
 import { SectionTitle, KPICard, getScoreColor } from '@/components/ui/dashboard-primitives';
-import { computeTrends } from '@/lib/analytics';
+
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, Cell, Legend, ReferenceLine, CartesianGrid,
@@ -33,8 +33,7 @@ const tooltipStyle = { background: 'hsl(210,20%,20%)', border: '1px solid hsl(21
 const tickStyle = { fontSize: 11, fill: 'hsl(215,12%,50%)' };
 
 export default function TrendsPage() {
-  const { incidents, scores } = useAppContext();
-  const trends = computeTrends(incidents, scores);
+  const { monthlyTrends: trends } = useAppContext();
 
   if (trends.length < 2) {
     return (
@@ -183,7 +182,7 @@ export default function TrendsPage() {
                 const prev = trends[i - 1];
                 const delta = prev ? Math.round((t.avgScore - prev.avgScore) * 10) / 10 : null;
                 return (
-                  <tr key={t.month} className="border-b border-card-foreground/10 last:border-b-0 hover:bg-card-foreground/5 transition-colors">
+                  <tr key={t.key} className="border-b border-card-foreground/10 last:border-b-0 hover:bg-card-foreground/5 transition-colors">
                     <td className="px-4 py-2.5 font-mono font-medium text-card-foreground">{t.label}</td>
                     <td className="px-4 py-2.5 text-right font-mono text-card-foreground/60">{t.count}</td>
                     <td className="px-4 py-2.5 text-right font-mono">

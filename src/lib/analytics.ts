@@ -269,26 +269,6 @@ export function computeAvgNoteLengthByLabel(scores: IncidentScore[]): { label: s
   });
 }
 
-export interface MonthTrend {
-  month: string;
-  label: string;
-  count: number;
-  avgScore: number;
-  excellent: number;
-  good: number;
-  poor: number;
-  critical: number;
-  excellentPct: number;
-  poorOrCriticalPct: number;
-  avgDescQuality: number;
-  avgRootCause: number;
-  avgSteps: number;
-  avgSpelling: number;
-  avgProfessionalism: number;
-  noRootCausePct: number;
-  highNoisePct: number;
-}
-
 /** Extract a `YYYY-MM` key from an incident's Opened timestamp, or '' if absent. */
 export function parseMonthKey(opened: string): string {
   if (!opened) return '';
@@ -302,50 +282,4 @@ export function monthLabel(key: string): string {
   const [year, month] = key.split('-');
   const d = new Date(Number(year), Number(month) - 1, 1);
   return d.toLocaleString('default', { month: 'short', year: 'numeric' });
-}
-
-export function computeTrends(incidents: EnrichedIncident[], scores: IncidentScore[]): MonthTrend[] {
-  const scoreMap = new Map(scores.map(s => [s.number, s]));
-  const byMonth: Record<string, { incs: EnrichedIncident[]; scores: IncidentScore[] }> = {};
-
-  for (const inc of incidents) {
-    const key = parseMonthKey(inc.Opened);
-    if (!key) continue;
-    if (!byMonth[key]) byMonth[key] = { incs: [], scores: [] };
-    byMonth[key].incs.push(inc);
-    const s = scoreMap.get(inc.Number);
-    if (s) byMonth[key].scores.push(s);
-  }
-
-  const avg = (arr: number[]) => Math.round(mean(arr) * 10) / 10;
-  const wholePct = (part: number, whole: number) => whole > 0 ? Math.round(part / whole * 100) : 0;
-
-  return Object.entries(byMonth)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, { scores: ms }]) => {
-      const count = ms.length;
-      const excellent = ms.filter(s => s.label === 'Excellent').length;
-      const good = ms.filter(s => s.label === 'Good').length;
-      const poor = ms.filter(s => s.label === 'Poor').length;
-      const critical = ms.filter(s => s.label === 'Critical').length;
-      return {
-        month,
-        label: monthLabel(month),
-        count,
-        avgScore: avg(ms.map(s => s.totalScore)),
-        excellent,
-        good,
-        poor,
-        critical,
-        excellentPct: wholePct(excellent, count),
-        poorOrCriticalPct: wholePct(poor + critical, count),
-        avgDescQuality: avg(ms.map(s => s.dimScores.description_quality)),
-        avgRootCause: avg(ms.map(s => s.dimScores.root_cause)),
-        avgSteps: avg(ms.map(s => s.dimScores.steps_documented)),
-        avgSpelling: avg(ms.map(s => s.dimScores.spelling_grammar)),
-        avgProfessionalism: avg(ms.map(s => s.dimScores.professionalism)),
-        noRootCausePct: wholePct(ms.filter(s => s.dimScores.root_cause === 0).length, count),
-        highNoisePct: wholePct(ms.filter(s => s.noiseRatio > 0.5).length, count),
-      };
-    });
 }

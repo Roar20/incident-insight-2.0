@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeOverview, computeDimStats, computeFeedback,
-  computeAgentStats, computeGroupStats, computeTrends,
+  computeAgentStats, computeGroupStats,
   computeNoteLengthBuckets, computeShortDescBuckets, computeNoiseBuckets,
   parseMonthKey, monthLabel,
 } from './analytics';
@@ -91,7 +91,6 @@ describe('empty inputs never produce NaN', () => {
     expect(computeAgentStats([], [])).toEqual([]);
     expect(computeGroupStats([], [])).toEqual([]);
     expect(computeFeedback([])).toEqual([]);
-    expect(computeTrends([], [])).toEqual([]);
   });
 
   it('computeGroupStats does not emit NaN when a group has no matching scores', () => {
@@ -184,31 +183,6 @@ describe('computeFeedback', () => {
 
     expect(items[0]).toEqual({ text: 'No root cause documented.', count: 3, pct: 75 });
     expect(items[1]).toEqual({ text: 'Description is empty or too short.', count: 1, pct: 25 });
-  });
-});
-
-describe('computeTrends', () => {
-  it('groups by month in chronological order and skips undated incidents', () => {
-    const incidents = [
-      incident({ Number: 'A', Opened: '2025-04-02 08:00:00' }),
-      incident({ Number: 'B', Opened: '2025-03-11 08:00:00' }),
-      incident({ Number: 'C', Opened: '2025-03-28 08:00:00' }),
-      incident({ Number: 'D', Opened: '' }),
-    ];
-    const scores = [
-      score({ number: 'A', totalScore: 80, label: 'Excellent' }),
-      score({ number: 'B', totalScore: 40, label: 'Poor' }),
-      score({ number: 'C', totalScore: 60, label: 'Good' }),
-      score({ number: 'D', totalScore: 10, label: 'Critical' }),
-    ];
-
-    const trends = computeTrends(incidents, scores);
-
-    expect(trends.map(t => t.month)).toEqual(['2025-03', '2025-04']);
-    expect(trends[0].count).toBe(2);
-    expect(trends[0].avgScore).toBe(50);
-    expect(trends[0].poorOrCriticalPct).toBe(50);
-    expect(trends[1].excellentPct).toBe(100);
   });
 });
 

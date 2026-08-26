@@ -12,6 +12,7 @@ import {
   computeAgentStats, computeGroupStats,
   type OverviewStats, type DimStats, type FeedbackItem, type AgentStat, type GroupStat,
 } from '../lib/analytics';
+import { annotateIncidents, type AnnotatedIncident } from '../lib/problems';
 
 export interface WorkerRequest {
   buffer: ArrayBuffer;
@@ -19,7 +20,7 @@ export interface WorkerRequest {
 }
 
 export interface WorkerResult {
-  incidents: EnrichedIncident[];
+  incidents: AnnotatedIncident[];
   scores: IncidentScore[];
   overview: OverviewStats;
   dimStats: DimStats[];
@@ -94,16 +95,22 @@ self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
       }
     }
 
-    post({ type: 'progress', percent: 92, processed: totalRows, total: totalRows });
+    post({ type: 'progress', percent: 90, processed: totalRows, total: totalRows });
+
+    // Clustering is corpus-level, so it runs once here rather than on every
+    // filter change on the main thread.
+    const annotated = annotateIncidents(incidents);
+
+    post({ type: 'progress', percent: 94, processed: totalRows, total: totalRows });
 
     const payload: WorkerResult = {
-      incidents,
+      incidents: annotated,
       scores,
-      overview: computeOverview(incidents, scores),
+      overview: computeOverview(annotated, scores),
       dimStats: computeDimStats(scores),
       feedbackItems: computeFeedback(scores),
-      agentStats: computeAgentStats(incidents, scores),
-      groupStats: computeGroupStats(incidents, scores),
+      agentStats: computeAgentStats(annotated, scores),
+      groupStats: computeGroupStats(annotated, scores),
       fileName: name,
     };
 

@@ -1,4 +1,5 @@
 import type { EnrichedIncident } from './parser';
+import { ROOT_CAUSE_RE } from './rootCause';
 
 export interface DimScores {
   description_quality: number;
@@ -28,14 +29,6 @@ const WEIGHTS = {
   professionalism: 0.15,
 };
 
-const ROOT_CAUSE_KW = [
-  "root cause", "root-cause", "because", "caused by", "the reason", "identified that",
-  "found that", "the issue was", "the problem was", "diagnosis", "traced to",
-  "due to", "investigation", "it was determined", "underlying",
-  "causa raiz", "causa raíz", "porque", "la razón", "se identificó",
-  "se encontró", "causado por", "el problema era", "diagnóstico", "se debe a",
-];
-
 const STEPS_KW = [
   "step", "performed", "applied", "executed", "restarted", "reconfigured",
   "updated", "corrected", "fixed", "implemented", "restored", "created",
@@ -48,7 +41,6 @@ const STEPS_KW = [
 
 // Pre-compiled regexes for keyword matching (optimization: compiled once at module level)
 function escapeRegex(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-const ROOT_CAUSE_RE = new RegExp(ROOT_CAUSE_KW.map(escapeRegex).join('|'), 'i');
 const STEPS_RE = new RegExp(STEPS_KW.map(escapeRegex).join('|'), 'i');
 
 const NOISE_PATTERNS = [

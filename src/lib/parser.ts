@@ -97,6 +97,22 @@ function col(row: IncidentRow, ...keys: string[]): unknown {
   return '';
 }
 
+/**
+ * Coerce a spreadsheet cell to a boolean.
+ *
+ * Exports write this column as a real boolean, as 0/1, or as text — and `false`
+ * arrives as the *string* "FALSE" often enough that a bare Boolean() cast reads
+ * every row as a pass.
+ */
+function toBool(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return /^(true|yes|y|1|si|sí)$/i.test(value.trim());
+  }
+  return Boolean(value);
+}
+
 function normalizeDate(value: unknown): string {
   if (!value) return '';
   if (value instanceof Date) {
@@ -141,7 +157,7 @@ export function enrichRow(row: IncidentRow): EnrichedIncident {
     Opened: normalizeDate(col(row, 'Opened', 'opened_at')),
     Closed: normalizeDate(col(row, 'Closed', 'closed_at')),
     Channel: String(col(row, 'Channel', 'contact_type')),
-    'Made SLA': Boolean(col(row, 'Made SLA', 'made_sla')),
+    'Made SLA': toBool(col(row, 'Made SLA', 'made_sla')),
     shortDescClean: cleanText(shortDesc),
     descClean: cleanText(desc),
     allNotes,

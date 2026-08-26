@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { useAppContext } from '@/context/AppContext';
 import { KPICard, SectionTitle, DimensionBar, EmptyState, getScoreColor, getScoreBarColor, ExecutiveInsightBanner } from '@/components/ui/dashboard-primitives';
 import { computeStateDist } from '@/lib/analytics';
+import { formatDuration } from '@/lib/periods';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import MonthFilter from '@/components/MonthFilter';
 
@@ -26,7 +28,27 @@ const tooltipStyle = { background: 'hsl(210,20%,20%)', border: '1px solid hsl(21
 const tickStyle = { fontSize: 11, fill: 'hsl(215,12%,50%)' };
 
 export default function OverviewPage() {
-  const { filteredOverview: overview, filteredDimStats: dimStats, filteredFeedbackItems: feedbackItems, filteredIncidents: incidents, filteredScores: scores, filteredGroupStats: groupStats } = useAppContext();
+  const { filteredOverview: overview, filteredDimStats: dimStats, filteredFeedbackItems: feedbackItems, filteredIncidents: incidents, filteredScores: scores, filteredGroupStats: groupStats, filteredProblems } = useAppContext();
+
+  const ops = useMemo(() => {
+    const durations = incidents.filter(i => i.resolutionHours !== null).map(i => i.resolutionHours!);
+    const sorted = [...durations].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const closed = incidents.filter(i => i.isClosed);
+    const breached = closed.filter(i => !i['Made SLA']).length;
+    const repeatVolume = filteredProblems.reduce((sum, p) => sum + p.count, 0);
+
+    return {
+      medianResolutionHours: sorted.length
+        ? (sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2)
+        : null,
+      resolvedCount: durations.length,
+      slaBreachPct: closed.length > 0 ? Math.round((breached / closed.length) * 100) : null,
+      openCount: incidents.length - closed.length,
+      recurringPct: incidents.length > 0 ? Math.round((repeatVolume / incidents.length) * 100) : 0,
+    };
+  }, [incidents, filteredProblems]);
+
   if (!overview) return null;
 
   if (overview.total === 0) {
@@ -81,6 +103,32 @@ export default function OverviewPage() {
         <KPICard label="Critical" value={overview.critical} colorClass="text-score-critical" sub={`${Math.round(overview.critical / overview.total * 100)}%`} />
         <KPICard label="No Root Cause" value={overview.noRootCause} sub={`${noRootCausePct}%`} />
         <KPICard label="High Noise" value={overview.highNoise} sub={`${highNoisePct}%`} />
+      </div>
+
+      <SectionTitle>Service Performance</SectionTitle>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-6">
+        <KPICard
+          label="Median Time to Resolve"
+          value={formatDuration(ops.medianResolutionHours)}
+          sub={`across ${ops.resolvedCount} resolved incidents`}
+        />
+        <KPICard
+          label="SLA Breached"
+          value={ops.slaBreachPct === null ? '—' : `${ops.slaBreachPct}%`}
+          colorClass={ops.slaBreachPct !== null && ops.slaBreachPct > 10 ? 'text-score-critical' : 'text-score-excellent'}
+          sub="of closed incidents"
+        />
+        <KPICard
+          label="Still Open"
+          value={ops.openCount}
+          sub={`${Math.round(ops.openCount / overview.total * 100)}% of the set`}
+        />
+        <KPICard
+          label="Recurring Volume"
+          value={`${ops.recurringPct}%`}
+          colorClass={ops.recurringPct > 40 ? 'text-score-poor' : undefined}
+          sub={`${filteredProblems.length} problems seen 2+ times`}
+        />
       </div>
 
       <SectionTitle>Top Documentation Issues</SectionTitle>
