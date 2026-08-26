@@ -86,9 +86,19 @@ function median(arr: number[]): number {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+/** Mean of `arr`, or 0 for an empty array (rather than NaN). */
+function mean(arr: number[]): number {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+/** `part` as a percentage of `whole` to one decimal, or 0 when `whole` is 0. */
+function pct(part: number, whole: number): number {
+  return whole > 0 ? Math.round((part / whole) * 1000) / 10 : 0;
+}
+
 export function computeOverview(incidents: EnrichedIncident[], scores: IncidentScore[]): OverviewStats {
   const total = scores.length;
-  const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const avg = mean;
   const noteLengths = scores.map(s => s.noteChars);
   const noteCounts = scores.map(s => s.noteCount);
 
@@ -106,14 +116,14 @@ export function computeOverview(incidents: EnrichedIncident[], scores: IncidentS
     avgNoteLength: Math.round(avg(noteLengths)),
     medianNoteLength: Math.round(median(noteLengths)),
     avgNoteCount: Math.round(avg(noteCounts) * 10) / 10,
-    hasHumanNotesPct: Math.round(scores.filter(s => s.noteCount > 0).length / total * 1000) / 10,
+    hasHumanNotesPct: pct(scores.filter(s => s.noteCount > 0).length, total),
   };
 }
 
 export function computeDimStats(scores: IncidentScore[]): DimStats[] {
   return DIM_META.map(({ key, label, weight }) => {
     const vals = scores.map(s => s.dimScores[key]);
-    const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    const avg = mean(vals);
     const buckets: [number, number, number, number] = [0, 0, 0, 0];
     for (const v of vals) {
       if (v < 25) buckets[0]++;
@@ -126,8 +136,8 @@ export function computeDimStats(scores: IncidentScore[]): DimStats[] {
       label,
       weight,
       avg: Math.round(avg * 10) / 10,
-      scored0Pct: Math.round(vals.filter(v => v === 0).length / vals.length * 1000) / 10,
-      scored100Pct: Math.round(vals.filter(v => v === 100).length / vals.length * 1000) / 10,
+      scored0Pct: pct(vals.filter(v => v === 0).length, vals.length),
+      scored100Pct: pct(vals.filter(v => v === 100).length, vals.length),
       buckets,
     };
   });
@@ -141,7 +151,7 @@ export function computeFeedback(scores: IncidentScore[]): FeedbackItem[] {
     }
   }
   return Object.entries(counts)
-    .map(([text, count]) => ({ text, count, pct: Math.round(count / scores.length * 1000) / 10 }))
+    .map(([text, count]) => ({ text, count, pct: pct(count, scores.length) }))
     .sort((a, b) => b.count - a.count);
 }
 
@@ -159,7 +169,7 @@ export function computeAgentStats(incidents: EnrichedIncident[], scores: Inciden
     .map(([name, arr]) => ({
       name,
       count: arr.length,
-      avgScore: Math.round(arr.reduce((a, s) => a + s.totalScore, 0) / arr.length * 10) / 10,
+      avgScore: Math.round(mean(arr.map(s => s.totalScore)) * 10) / 10,
       excellent: arr.filter(s => s.label === 'Excellent').length,
       good: arr.filter(s => s.label === 'Good').length,
       poor: arr.filter(s => s.label === 'Poor').length,
@@ -179,19 +189,16 @@ export function computeGroupStats(incidents: EnrichedIncident[], scores: Inciden
     groups[g].incidents.push(inc);
   }
   return Object.entries(groups)
-    .map(([name, { scores: arr }]) => {
-      const noteChars = arr.map(s => s.noteChars);
-      return {
-        name,
-        count: arr.length,
-        avgScore: Math.round(arr.reduce((a, s) => a + s.totalScore, 0) / arr.length * 10) / 10,
-        excellent: arr.filter(s => s.label === 'Excellent').length,
-        critical: arr.filter(s => s.label === 'Critical').length,
-        avgNoise: Math.round(arr.reduce((a, s) => a + s.noiseRatio, 0) / arr.length * 100),
-        avgRootCause: Math.round(arr.reduce((a, s) => a + s.dimScores.root_cause, 0) / arr.length * 10) / 10,
-        avgNoteLength: Math.round(noteChars.reduce((a, b) => a + b, 0) / noteChars.length),
-      };
-    })
+    .map(([name, { scores: arr }]) => ({
+      name,
+      count: arr.length,
+      avgScore: Math.round(mean(arr.map(s => s.totalScore)) * 10) / 10,
+      excellent: arr.filter(s => s.label === 'Excellent').length,
+      critical: arr.filter(s => s.label === 'Critical').length,
+      avgNoise: Math.round(mean(arr.map(s => s.noiseRatio)) * 100),
+      avgRootCause: Math.round(mean(arr.map(s => s.dimScores.root_cause)) * 10) / 10,
+      avgNoteLength: Math.round(mean(arr.map(s => s.noteChars))),
+    }))
     .sort((a, b) => b.avgScore - a.avgScore);
 }
 
@@ -205,7 +212,7 @@ export function computeNoteLengthBuckets(scores: IncidentScore[]): NoteLengthBuc
   ];
   return buckets.map(b => {
     const count = scores.filter(s => s.noteChars >= b.min && s.noteChars <= b.max).length;
-    return { label: b.label, count, pct: Math.round(count / scores.length * 1000) / 10 };
+    return { label: b.label, count, pct: pct(count, scores.length) };
   });
 }
 
@@ -218,7 +225,7 @@ export function computeShortDescBuckets(incidents: EnrichedIncident[]): NoteLeng
   ];
   return buckets.map(b => {
     const count = incidents.filter(b.test).length;
-    return { label: b.label, count, pct: Math.round(count / incidents.length * 1000) / 10 };
+    return { label: b.label, count, pct: pct(count, incidents.length) };
   });
 }
 
@@ -231,7 +238,7 @@ export function computeNoiseBuckets(scores: IncidentScore[]): NoteLengthBucket[]
   ];
   return buckets.map(b => {
     const count = scores.filter(s => s.noiseRatio >= b.min && s.noiseRatio < b.max).length;
-    return { label: b.label, count, pct: Math.round(count / scores.length * 1000) / 10 };
+    return { label: b.label, count, pct: pct(count, scores.length) };
   });
 }
 
@@ -258,8 +265,7 @@ export function computeAvgNoteLengthByLabel(scores: IncidentScore[]): { label: s
   const colors = ['hsl(152,69%,42%)', 'hsl(43,96%,56%)', 'hsl(16,85%,57%)', 'hsl(0,72%,55%)'];
   return labels.map((l, i) => {
     const arr = scores.filter(s => s.label === l);
-    const avg = arr.length ? Math.round(arr.reduce((a, s) => a + s.noteChars, 0) / arr.length) : 0;
-    return { label: l, avg, color: colors[i] };
+    return { label: l, avg: Math.round(mean(arr.map(s => s.noteChars))), color: colors[i] };
   });
 }
 
@@ -283,13 +289,15 @@ export interface MonthTrend {
   highNoisePct: number;
 }
 
-function parseMonthKey(opened: string): string {
+/** Extract a `YYYY-MM` key from an incident's Opened timestamp, or '' if absent. */
+export function parseMonthKey(opened: string): string {
   if (!opened) return '';
   const m = opened.match(/(\d{4})[/-](\d{2})/);
   return m ? `${m[1]}-${m[2]}` : '';
 }
 
-function monthLabel(key: string): string {
+/** Render a `YYYY-MM` key as e.g. "Mar 2025". */
+export function monthLabel(key: string): string {
   if (!key) return '';
   const [year, month] = key.split('-');
   const d = new Date(Number(year), Number(month) - 1, 1);
@@ -309,30 +317,35 @@ export function computeTrends(incidents: EnrichedIncident[], scores: IncidentSco
     if (s) byMonth[key].scores.push(s);
   }
 
-  const avg = (arr: number[]) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10 : 0;
+  const avg = (arr: number[]) => Math.round(mean(arr) * 10) / 10;
+  const wholePct = (part: number, whole: number) => whole > 0 ? Math.round(part / whole * 100) : 0;
 
   return Object.entries(byMonth)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, { scores: ms }]) => {
       const count = ms.length;
+      const excellent = ms.filter(s => s.label === 'Excellent').length;
+      const good = ms.filter(s => s.label === 'Good').length;
+      const poor = ms.filter(s => s.label === 'Poor').length;
+      const critical = ms.filter(s => s.label === 'Critical').length;
       return {
         month,
         label: monthLabel(month),
         count,
         avgScore: avg(ms.map(s => s.totalScore)),
-        excellent: ms.filter(s => s.label === 'Excellent').length,
-        good: ms.filter(s => s.label === 'Good').length,
-        poor: ms.filter(s => s.label === 'Poor').length,
-        critical: ms.filter(s => s.label === 'Critical').length,
-        excellentPct: count > 0 ? Math.round(ms.filter(s => s.label === 'Excellent').length / count * 100) : 0,
-        poorOrCriticalPct: count > 0 ? Math.round((ms.filter(s => s.label === 'Poor').length + ms.filter(s => s.label === 'Critical').length) / count * 100) : 0,
+        excellent,
+        good,
+        poor,
+        critical,
+        excellentPct: wholePct(excellent, count),
+        poorOrCriticalPct: wholePct(poor + critical, count),
         avgDescQuality: avg(ms.map(s => s.dimScores.description_quality)),
         avgRootCause: avg(ms.map(s => s.dimScores.root_cause)),
         avgSteps: avg(ms.map(s => s.dimScores.steps_documented)),
         avgSpelling: avg(ms.map(s => s.dimScores.spelling_grammar)),
         avgProfessionalism: avg(ms.map(s => s.dimScores.professionalism)),
-        noRootCausePct: count > 0 ? Math.round(ms.filter(s => s.dimScores.root_cause === 0).length / count * 100) : 0,
-        highNoisePct: count > 0 ? Math.round(ms.filter(s => s.noiseRatio > 0.5).length / count * 100) : 0,
+        noRootCausePct: wholePct(ms.filter(s => s.dimScores.root_cause === 0).length, count),
+        highNoisePct: wholePct(ms.filter(s => s.noiseRatio > 0.5).length, count),
       };
     });
 }

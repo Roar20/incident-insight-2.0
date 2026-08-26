@@ -1,5 +1,5 @@
 import { useAppContext } from '@/context/AppContext';
-import { KPICard, SectionTitle, DimensionBar, getScoreColor, getScoreBarColor } from '@/components/ui/dashboard-primitives';
+import { KPICard, SectionTitle, DimensionBar, EmptyState, getScoreColor, getScoreBarColor } from '@/components/ui/dashboard-primitives';
 import {
   computeNoteLengthBuckets, computeShortDescBuckets, computeNoiseBuckets,
   computeAvgNoteLengthByLabel,
@@ -14,6 +14,15 @@ const tickStyle = { fontSize: 11, fill: 'hsl(215,12%,50%)' };
 export default function TextQualityPage() {
   const { filteredOverview: overview, filteredScores: scores, filteredIncidents: incidents, filteredDimStats: dimStats, filteredGroupStats: groupStats } = useAppContext();
   if (!overview) return null;
+
+  if (overview.total === 0) {
+    return (
+      <div className="animate-fade-in">
+        <MonthFilter />
+        <EmptyState message="No incidents match the selected months." />
+      </div>
+    );
+  }
 
   const noteBuckets = computeNoteLengthBuckets(scores);
   const sdBuckets = computeShortDescBuckets(incidents);

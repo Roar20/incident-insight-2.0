@@ -1,5 +1,5 @@
 import { useAppContext } from '@/context/AppContext';
-import { SectionTitle, getScoreColor } from '@/components/ui/dashboard-primitives';
+import { SectionTitle, EmptyState, getScoreColor } from '@/components/ui/dashboard-primitives';
 import MonthFilter from '@/components/MonthFilter';
 import { motion } from 'framer-motion';
 
@@ -20,6 +20,9 @@ export default function ByAgentPage() {
     <div className="animate-fade-in">
       <MonthFilter />
       <SectionTitle>Performance by Agent</SectionTitle>
+      {filtered.length === 0 && (
+        <EmptyState message="No agents match the selected months and quality filter." />
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
         {filtered.map((a, i) => (
           <motion.div

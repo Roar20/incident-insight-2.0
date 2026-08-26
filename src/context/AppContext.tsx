@@ -1,11 +1,12 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import type { EnrichedIncident } from '@/lib/parser';
 import type { IncidentScore } from '@/lib/scorer';
 import type { OverviewStats, DimStats, FeedbackItem, AgentStat, GroupStat } from '@/lib/analytics';
 import {
   computeOverview, computeDimStats, computeFeedback,
-  computeAgentStats, computeGroupStats,
+  computeAgentStats, computeGroupStats, parseMonthKey, monthLabel,
 } from '@/lib/analytics';
+import type { WorkerMessage } from '@/workers/scoringWorker';
 
 export interface MonthOption {
   key: string;
@@ -53,19 +54,6 @@ export function useAppContext() {
   return ctx;
 }
 
-function parseMonthKey(opened: string): string {
-  if (!opened) return '';
-  const m = opened.match(/(\d{4})[/-](\d{2})/);
-  return m ? `${m[1]}-${m[2]}` : '';
-}
-
-function monthLabel(key: string): string {
-  if (!key) return '';
-  const [year, month] = key.split('-');
-  const d = new Date(Number(year), Number(month) - 1, 1);
-  return d.toLocaleString('default', { month: 'short', year: 'numeric' });
-}
-
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>({
     incidents: [],
@@ -86,7 +74,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectedMonths: [],
   });
 
+  // Tracked so an in-flight parse can be torn down when a second file is
+  // dropped, or when the provider unmounts.
+  const workerRef = useRef<Worker | null>(null);
+
+  const stopWorker = useCallback(() => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+  }, []);
+
+  useEffect(() => stopWorker, [stopWorker]);
+
   const loadFile = useCallback(async (file: File, name: string) => {
+    stopWorker();
     setState(prev => ({
       ...prev,
       loading: true,
@@ -100,13 +100,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setState(prev => ({ ...prev, loadingProgress: 20, loadingMessage: 'Starting worker...' }));
 
       const worker = new Worker(
-        new URL('../workers/scoringWorker.js', import.meta.url),
+        new URL('../workers/scoringWorker.ts', import.meta.url),
         { type: 'module' }
       );
+      workerRef.current = worker;
 
-      worker.postMessage({ buffer, name }, [buffer]);
-
-      worker.onmessage = (e: MessageEvent) => {
+      worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
         const msg = e.data;
 
         if (msg.type === 'progress') {
@@ -118,17 +117,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (msg.type === 'result') {
-          const { incidents = [], scores = [], overview, dimStats, feedbackItems, agentStats, groupStats } = msg.payload;
+          const { incidents, scores, overview, dimStats, feedbackItems, agentStats, groupStats } = msg.payload;
 
           const monthSet = new Set<string>();
           for (const inc of incidents) {
-            const m = (inc.Opened || '').match(/(\d{4})[/-](\d{2})/);
-            if (m) monthSet.add(`${m[1]}-${m[2]}`);
+            const key = parseMonthKey(inc.Opened);
+            if (key) monthSet.add(key);
           }
-          const availableMonthKeys = [...monthSet].sort();
-          const availableMonths: MonthOption[] = availableMonthKeys.map((k: string) => ({
-            key: k,
-            label: monthLabel(k),
+          const availableMonths: MonthOption[] = [...monthSet].sort().map(key => ({
+            key,
+            label: monthLabel(key),
           }));
 
           setState(prev => ({
@@ -139,7 +137,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             availableMonths, selectedMonths: [],
             loadingProgress: 100, loadingMessage: '',
           }));
-          worker.terminate();
+          stopWorker();
         }
 
         if (msg.type === 'error') {
@@ -150,7 +148,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             loadingProgress: 0,
             loadingMessage: `Error: ${msg.payload}`,
           }));
-          worker.terminate();
+          stopWorker();
         }
       };
 
@@ -162,19 +160,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           loadingProgress: 0,
           loadingMessage: `Worker error: ${err.message}`,
         }));
-        worker.terminate();
+        stopWorker();
       };
 
-    } catch (err: any) {
+      worker.postMessage({ buffer, name }, [buffer]);
+    } catch (err) {
       console.error('Processing error:', err);
+      stopWorker();
       setState(prev => ({
         ...prev,
         loading: false,
         loadingProgress: 0,
-        loadingMessage: `Error: ${err.message}`,
+        loadingMessage: `Error: ${err instanceof Error ? err.message : String(err)}`,
       }));
     }
-  }, []);
+  }, [stopWorker]);
 
   const setCurrentPage = useCallback((page: string) => {
     setState(prev => ({ ...prev, currentPage: page }));
@@ -188,39 +188,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, selectedMonths: months }));
   }, []);
 
+  // When no month is selected the filtered views are just the precomputed
+  // whole-dataset stats. When a month *is* selected the stats are always
+  // recomputed from that subset — including when the subset is empty, so an
+  // empty selection renders an empty dashboard rather than the all-time numbers.
+  const isMonthFiltered = state.selectedMonths.length > 0;
+
   const filteredIncidents = useMemo(() => {
-    if (state.selectedMonths.length === 0) return state.incidents;
-    return state.incidents.filter(inc => {
-      const k = parseMonthKey(inc.Opened);
-      return state.selectedMonths.includes(k);
-    });
-  }, [state.incidents, state.selectedMonths]);
+    if (!isMonthFiltered) return state.incidents;
+    const selected = new Set(state.selectedMonths);
+    return state.incidents.filter(inc => selected.has(parseMonthKey(inc.Opened)));
+  }, [state.incidents, state.selectedMonths, isMonthFiltered]);
 
   const filteredScores = useMemo(() => {
-    if (state.selectedMonths.length === 0) return state.scores;
+    if (!isMonthFiltered) return state.scores;
     const nums = new Set(filteredIncidents.map(i => i.Number));
     return state.scores.filter(s => nums.has(s.number));
-  }, [state.scores, filteredIncidents, state.selectedMonths]);
+  }, [state.scores, filteredIncidents, isMonthFiltered]);
 
   const filteredOverview = useMemo(() =>
-    filteredIncidents.length > 0 ? computeOverview(filteredIncidents, filteredScores) : state.overview,
-    [filteredIncidents, filteredScores, state.overview]);
+    isMonthFiltered ? computeOverview(filteredIncidents, filteredScores) : state.overview,
+    [isMonthFiltered, filteredIncidents, filteredScores, state.overview]);
 
   const filteredDimStats = useMemo(() =>
-    filteredScores.length > 0 ? computeDimStats(filteredScores) : state.dimStats,
-    [filteredScores, state.dimStats]);
+    isMonthFiltered ? computeDimStats(filteredScores) : state.dimStats,
+    [isMonthFiltered, filteredScores, state.dimStats]);
 
   const filteredFeedbackItems = useMemo(() =>
-    filteredScores.length > 0 ? computeFeedback(filteredScores) : state.feedbackItems,
-    [filteredScores, state.feedbackItems]);
+    isMonthFiltered ? computeFeedback(filteredScores) : state.feedbackItems,
+    [isMonthFiltered, filteredScores, state.feedbackItems]);
 
   const filteredAgentStats = useMemo(() =>
-    filteredIncidents.length > 0 ? computeAgentStats(filteredIncidents, filteredScores) : state.agentStats,
-    [filteredIncidents, filteredScores, state.agentStats]);
+    isMonthFiltered ? computeAgentStats(filteredIncidents, filteredScores) : state.agentStats,
+    [isMonthFiltered, filteredIncidents, filteredScores, state.agentStats]);
 
   const filteredGroupStats = useMemo(() =>
-    filteredIncidents.length > 0 ? computeGroupStats(filteredIncidents, filteredScores) : state.groupStats,
-    [filteredIncidents, filteredScores, state.groupStats]);
+    isMonthFiltered ? computeGroupStats(filteredIncidents, filteredScores) : state.groupStats,
+    [isMonthFiltered, filteredIncidents, filteredScores, state.groupStats]);
 
   return (
     <AppContext.Provider value={{

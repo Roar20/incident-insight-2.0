@@ -31,6 +31,14 @@ export function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+export function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="v1-card p-12 text-center text-[13px] text-card-foreground/50">
+      {message}
+    </div>
+  );
+}
+
 export function ScoreBadge({ label, score }: { label: string; score: number }) {
   const colorMap: Record<string, string> = {
     Excellent: 'bg-score-excellent/15 text-score-excellent',

@@ -60,8 +60,8 @@ export default function AllIncidentsPage() {
       case 'number': result.sort((a, b) => a.incident.Number.localeCompare(b.incident.Number)); break;
     }
 
-    return result.slice(0, 500);
-  }, [incidents, scoreMap, debouncedSearch, activeLabel, groupFilter, stateFilter, sort, filterLabel]);
+    return result;
+  }, [incidents, scoreMap, debouncedSearch, activeLabel, groupFilter, stateFilter, sort]);
 
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
@@ -133,7 +133,7 @@ export default function AllIncidentsPage() {
               const { incident, score } = filtered[virtualRow.index];
               return (
                 <div
-                  key={incident.Number}
+                  key={virtualRow.key}
                   onClick={() => setSelectedIncident({ incident, score })}
                   className="flex items-center border-t border-card-foreground/10 cursor-pointer hover:bg-card-foreground/5 transition-colors"
                   style={{

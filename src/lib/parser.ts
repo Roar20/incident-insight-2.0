@@ -86,14 +86,18 @@ function parseNotes(raw: string): NoteEntry[] {
   return entries;
 }
 
-function col(row: Record<string, any>, ...keys: string[]): any {
+/** One raw spreadsheet row, keyed by whatever headers the export happened to use. */
+export type IncidentRow = Record<string, unknown>;
+
+/** First present value among `keys`, so display names and field names both work. */
+function col(row: IncidentRow, ...keys: string[]): unknown {
   for (const k of keys) {
     if (row[k] !== undefined) return row[k];
   }
   return '';
 }
 
-function normalizeDate(value: any): string {
+function normalizeDate(value: unknown): string {
   if (!value) return '';
   if (value instanceof Date) {
     return value.toISOString().slice(0, 19).replace('T', ' ');
@@ -107,41 +111,59 @@ function normalizeDate(value: any): string {
   return String(value);
 }
 
-export function parseExcelFile(buffer: ArrayBuffer): EnrichedIncident[] {
-  const wb = XLSX.read(buffer, { type: 'array' });
-  const sheetName = wb.SheetNames[0];
-  const rows = XLSX.utils.sheet_to_json<Record<string, any>>(wb.Sheets[sheetName]);
+/**
+ * Turn one raw spreadsheet row into an incident with cleaned text and split notes.
+ *
+ * This is the single definition used by both the browser worker and the
+ * serverless API - keep enrichment changes here rather than copying them.
+ */
+export function enrichRow(row: IncidentRow): EnrichedIncident {
+  const shortDesc = String(col(row, 'Short description', 'short_description'));
+  const desc = String(col(row, 'Description', 'description'));
+  const workNotes = String(col(row, 'Work notes', 'work_notes'));
+  const allNotes = parseNotes(workNotes);
+  const humanNotes = allNotes.filter(n => !n.isSystem);
 
-  return rows.map(row => {
-    const shortDesc = String(col(row, 'Short description', 'short_description'));
-    const desc = String(col(row, 'Description', 'description'));
-    const workNotes = String(col(row, 'Work notes', 'work_notes'));
-    const allNotes = parseNotes(workNotes);
-    const humanNotes = allNotes.filter(n => !n.isSystem);
+  return {
+    Number: String(col(row, 'Number', 'number')),
+    'Task type': String(col(row, 'Task type', 'sys_class_name') || 'Incident'),
+    Priority: String(col(row, 'Priority', 'priority'))
+      .replace(/\u00e2\u20ac\u201c/g, '\u2013')
+      .replace(/\u00e2\u20ac\u0153/g, '\u201c')
+      .replace(/\u00e2\u20ac\u009d/g, '\u201d')
+      .trim(),
+    State: String(col(row, 'State', 'state')),
+    'Short description': shortDesc,
+    Description: desc,
+    'Work notes': workNotes,
+    'Assignment group': String(col(row, 'Assignment group', 'assignment_group')),
+    'Assigned to': String(col(row, 'Assigned to', 'assigned_to')),
+    Opened: normalizeDate(col(row, 'Opened', 'opened_at')),
+    Closed: normalizeDate(col(row, 'Closed', 'closed_at')),
+    Channel: String(col(row, 'Channel', 'contact_type')),
+    'Made SLA': Boolean(col(row, 'Made SLA', 'made_sla')),
+    shortDescClean: cleanText(shortDesc),
+    descClean: cleanText(desc),
+    allNotes,
+    humanNotes,
+    isAutoDesc: isAutoDescription(desc),
+  };
+}
 
-    return {
-      Number: String(col(row, 'Number', 'number')),
-      'Task type': String(col(row, 'Task type', 'sys_class_name') || 'Incident'),
-      Priority: String(col(row, 'Priority', 'priority'))
-        .replace(/\u00e2\u20ac\u201c/g, '\u2013')
-        .replace(/\u00e2\u20ac\u0153/g, '\u201c')
-        .replace(/\u00e2\u20ac\u009d/g, '\u201d')
-        .trim(),
-      State: String(col(row, 'State', 'state')),
-      'Short description': shortDesc,
-      Description: desc,
-      'Work notes': workNotes,
-      'Assignment group': String(col(row, 'Assignment group', 'assignment_group')),
-      'Assigned to': String(col(row, 'Assigned to', 'assigned_to')),
-      Opened: normalizeDate(col(row, 'Opened', 'opened_at')),
-      Closed: normalizeDate(col(row, 'Closed', 'closed_at')),
-      Channel: String(col(row, 'Channel', 'contact_type')),
-      'Made SLA': Boolean(col(row, 'Made SLA', 'made_sla')),
-      shortDescClean: cleanText(shortDesc),
-      descClean: cleanText(desc),
-      allNotes,
-      humanNotes,
-      isAutoDesc: isAutoDescription(desc),
-    };
+/** Read the first sheet of a workbook into plain header-keyed rows. */
+export function readIncidentRows(buffer: ArrayBuffer): IncidentRow[] {
+  const wb = XLSX.read(buffer, {
+    type: 'array',
+    cellFormula: false,
+    cellHTML: false,
+    cellStyles: false,
+    dense: true,
   });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) return [];
+  return XLSX.utils.sheet_to_json<IncidentRow>(wb.Sheets[sheetName], { defval: '' });
+}
+
+export function parseExcelFile(buffer: ArrayBuffer): EnrichedIncident[] {
+  return readIncidentRows(buffer).map(enrichRow);
 }

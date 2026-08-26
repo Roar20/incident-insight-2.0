@@ -1,5 +1,5 @@
 import { useAppContext } from '@/context/AppContext';
-import { KPICard, SectionTitle, DimensionBar, getScoreColor, getScoreBarColor, ExecutiveInsightBanner } from '@/components/ui/dashboard-primitives';
+import { KPICard, SectionTitle, DimensionBar, EmptyState, getScoreColor, getScoreBarColor, ExecutiveInsightBanner } from '@/components/ui/dashboard-primitives';
 import { computeStateDist } from '@/lib/analytics';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import MonthFilter from '@/components/MonthFilter';
@@ -28,6 +28,15 @@ const tickStyle = { fontSize: 11, fill: 'hsl(215,12%,50%)' };
 export default function OverviewPage() {
   const { filteredOverview: overview, filteredDimStats: dimStats, filteredFeedbackItems: feedbackItems, filteredIncidents: incidents, filteredScores: scores, filteredGroupStats: groupStats } = useAppContext();
   if (!overview) return null;
+
+  if (overview.total === 0) {
+    return (
+      <div className="animate-fade-in">
+        <MonthFilter />
+        <EmptyState message="No incidents match the selected months." />
+      </div>
+    );
+  }
 
   const noRootCausePct = Math.round(overview.noRootCause / overview.total * 100);
   const poorPct = Math.round((overview.poor + overview.critical) / overview.total * 100);
