@@ -1,0 +1,12 @@
+{
+  "installCommand": "npm install",
+  "functions": {
+    "api/process.ts": {
+      "maxDuration": 300,
+      "includeFiles": "node_modules/@vercel/blob/**"
+    },
+    "api/upload.ts": {
+      "maxDuration": 30
+    }
+  }
+}
