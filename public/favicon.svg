@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Incident Insight">
+  <title>Incident Insight</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A4F8F"/>
+      <stop offset="1" stop-color="#022F5A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Brand tile: --primary (209 96% 18%) deepening toward the bottom. -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+
+  <!-- The document under analysis. -->
+  <rect x="13" y="9" width="26" height="34" rx="3" fill="#F8FAFC"/>
+
+  <!-- Lines of work-note text, shortening like a real paragraph. -->
+  <g fill="#0A4F8F">
+    <rect x="18" y="16" width="16" height="2.6" rx="1.3"/>
+    <rect x="18" y="22" width="16" height="2.6" rx="1.3"/>
+    <rect x="18" y="28" width="10" height="2.6" rx="1.3"/>
+  </g>
+
+  <!-- Magnifier. Each stroke is drawn twice: a wide background-coloured
+       underlay first, so the glass stays legible where it crosses the page,
+       then the cyan stroke on top. -->
+  <g fill="none" stroke-linecap="round">
+    <line x1="45.5" y1="44.5" x2="53" y2="52" stroke="#022F5A" stroke-width="10"/>
+    <circle cx="37.5" cy="36.5" r="11.5" stroke="#022F5A" stroke-width="9"/>
+    <circle cx="37.5" cy="36.5" r="11.5" fill="#0A4F8F" stroke="#4CC3F5" stroke-width="4.5"/>
+    <line x1="45.6" y1="44.6" x2="53" y2="52" stroke="#4CC3F5" stroke-width="5.5"/>
+  </g>
+</svg>
