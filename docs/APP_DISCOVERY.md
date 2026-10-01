@@ -29,7 +29,7 @@
 7. **FACT** — The only global time filter is **month by `Opened`**. **Trends** and **Weekly Review** ignore it (by design), and the sidebar's global quality filter only applies to *All Incidents* and *By Agent*.
 8. **FACT** — **No exports exist** (CSV, Excel, JSON or other). `api/` returns JSON but the frontend never calls it.
 9. **FACT** — There are **no datasets** in the repo or its history. Test data is synthetic and defined inline in the tests. No real ServiceNow extracts are versioned.
-10. **FACT** — The probes confirm significant ingestion bugs: **UTF-8 CSV → mojibake**, **CSV with BOM → `Number` column lost (all scores collide)**, **missing `Made SLA` → 100% SLA breach**, **dd/mm dates either discarded or read as mm/dd**, and **work notes with other journal types are mis-split**. See §17.
+10. **FACT** — The probes confirm significant ingestion bugs: **UTF-8 CSV → mojibake**, **empty/duplicate `Number` → scores collide in the join** *(corrected in Phase 0.5: the "CSV with BOM" trigger was a test-environment artifact)*, **missing `Made SLA` → 100% SLA breach**, **dd/mm dates either discarded or read as mm/dd**, and **work notes with other journal types are mis-split**. See §17.
 
 ---
 
@@ -228,7 +228,7 @@ Source: `parser.ts › RawIncident/EnrichedIncident/enrichRow`, `problems.ts ›
 | Input | Result |
 |---|---|
 | UTF-8 CSV without BOM containing `Contraseña ... solución` | `ContraseÃ±a ... soluciÃ³n` (mojibake). The Priority repair does not cover this pattern (`3 â\u0080\u0093 Moderate`). |
-| UTF-8 CSV **with BOM** | Header becomes `ï»¿Number` → `Number` = `''` on **every** row |
+| UTF-8 CSV **with BOM** | ~~Header becomes `ï»¿Number` → `Number` = `''` on every row~~ **Correction (Phase 0.5): false positive.** It only happens under jsdom, where a `TextEncoder` buffer fails `instanceof ArrayBuffer` and SheetJS takes another path. In real Chromium (`File.arrayBuffer()` → `XLSX.read`) the BOM is detected and the CSV reads correctly. |
 | CSV with `04/03/2025 10:00` | SheetJS converts it to a serial → `2025-04-03` (read as **mm/dd**) |
 | Text cell `13/03/2025 09:30` or `03-04-2025 …` or `4-Mar-2025` | `Opened` stays as text → `parseMonthKey` = `''`, `weekKey` = `''`, `resolutionHours` = null |
 | Missing `Made SLA` column | `false` → every closed incident counts as an SLA breach (cluster with `slaBreachPct` = 100) |
@@ -548,7 +548,7 @@ Derived from tests (T) or from code and comments (C).
 | ID | Sev | Type | Finding | Label / evidence |
 |---|---|---|---|---|
 | F-01 | H | Bug (ingestion) | **UTF-8 CSV is decoded incorrectly** (mojibake: `Contraseña`→`ContraseÃ±a`). Spanish keywords with accents (RC `causa raíz`, `diagnóstico`; steps `solución`; taxonomy `contraseña`, `buzón`) stop matching for CSV. The Priority repair does not cover this pattern. | FACT probe; `parser.ts › readIncidentRows` (no `codepage`) |
-| F-02 | H | Bug (ingestion / join) | **CSV with BOM** → header `ï»¿Number` → `Number=''` on every row → `scoreMap` collapses to a single entry. All Incidents shows the same score for every row; agent/group stats use a single score; with the month filter on, `filteredScores` includes every score. The same applies to any file without a `Number` column or with duplicate Numbers. | FACT probe; `AllIncidentsPage.tsx:29,36`, `analytics.ts:159,182`, `AppContext.tsx:224-228` |
+| F-02 | H | Bug (join) | Any file **without a `Number` column, with empty Numbers or with duplicate Numbers** → `scoreMap` collapses those rows to a single entry. All Incidents shows the same score for every colliding row; agent/group stats reuse one score; with the month filter on, `filteredScores` can include scores from other months. **Correction (Phase 0.5):** the original trigger cited here ("CSV with BOM → header `ï»¿Number`") was a **false positive** of the jsdom test environment; real Chromium reads BOM CSVs correctly. The collision itself is real and is a join issue, not an ingestion one. | FACT (code); BOM part refuted in Chromium; `AllIncidentsPage.tsx:29,36`, `analytics.ts:159,182`, `AppContext.tsx:224-228` |
 | F-03 | H | Bug (semantics) | **Missing `Made SLA` column ⇒ 100% SLA breach** (`toBool('')=false`), even though the README says missing columns "degrade gracefully" and `slaBreachPct` is documented as "null if unknown". | FACT probe; `parser.ts:107-114,160`, `problems.ts:302-305` |
 | F-04 | H | Bug (dates) | Text dates not in ISO format (`13/03/2025`, `03-04-2025`, `4-Mar-2025`) → no month, week or resolution time; the incidents silently drop out of month filters, trends and the weekly review. In CSV, `dd/mm` is interpreted as **mm/dd** (`04/03/2025`→April 3). | FACT probe; `parser.ts › normalizeDate` (text passes through), `analytics › parseMonthKey`, `periods › parseTimestamp` |
 | F-05 | M | Bug (parsing) | `NOTE_RE` uses `.+?` with the `s` flag: if the field contains other journal types (e.g. `(Additional comments)`), the "author" of the next note absorbs lines of text and entries are lost. | FACT probe; `parser.ts:34` |
