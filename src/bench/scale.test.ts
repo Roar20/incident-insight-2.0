@@ -60,7 +60,7 @@ function buildRows() {
 
 describe('scale', () => {
   it(`clusters ${ROWS.toLocaleString()} incidents into the problems that generated them`, () => {
-    const incidents = buildRows().map(enrichRow);
+    const incidents = buildRows().map(row => enrichRow(row));
     const scores = incidents.map(scoreIncident);
 
     const started = Date.now();

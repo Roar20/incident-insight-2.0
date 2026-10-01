@@ -126,7 +126,62 @@ function toSlaFlag(value: unknown): boolean | null {
   return toBool(value);
 }
 
-function normalizeDate(value: unknown): string {
+/** How a numeric day/month text date is written: 13/03/2025 or 03/13/2025. */
+export type DateOrder = 'dmy' | 'mdy';
+
+export interface EnrichOptions {
+  /** Order for text dates whose day and month are both ≤ 12. Defaults to 'dmy'. */
+  dateOrder?: DateOrder;
+}
+
+/** dd/mm/yyyy or mm/dd/yyyy (/, - or . separated), optional time and AM/PM. */
+const DAY_MONTH_RE = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?)?$/;
+
+const DATE_COLUMNS = ['Opened', 'opened_at', 'Closed', 'closed_at'];
+
+/**
+ * Decide whether a file writes text dates day-first or month-first.
+ *
+ * A single date like 04/03/2025 cannot say, so the whole file is examined: a
+ * first number above 12 means day-first, a second number above 12 means
+ * month-first. A file where nothing decides it is read day-first.
+ */
+export function inferDateOrder(rows: IncidentRow[]): DateOrder {
+  let dayFirst = 0;
+  let monthFirst = 0;
+  for (const row of rows) {
+    for (const key of DATE_COLUMNS) {
+      const value = row[key];
+      if (typeof value !== 'string') continue;
+      const m = value.trim().match(DAY_MONTH_RE);
+      if (!m) continue;
+      if (+m[1] > 12) dayFirst++;
+      else if (+m[2] > 12) monthFirst++;
+    }
+  }
+  return monthFirst > dayFirst ? 'mdy' : 'dmy';
+}
+
+/** A day/month text date as "YYYY-MM-DD HH:MM:SS", or null if it is not one. */
+function parseDayMonthDate(text: string, order: DateOrder): string | null {
+  const m = text.trim().match(DAY_MONTH_RE);
+  if (!m) return null;
+  const [, a, b, y, h = '0', mi = '0', s = '0', meridiem] = m;
+  // An unambiguous value overrides the file-level order.
+  const dayFirst = +a > 12 || (+b <= 12 && order === 'dmy');
+  const day = dayFirst ? +a : +b;
+  const month = dayFirst ? +b : +a;
+  let hour = +h;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    hour = (hour % 12) + (meridiem.toLowerCase() === 'pm' ? 12 : 0);
+  }
+  const date = new Date(Date.UTC(+y, month - 1, day, hour, +mi, +s));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day || date.getUTCHours() !== hour) return null;
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function normalizeDate(value: unknown, order: DateOrder): string {
   if (!value) return '';
   if (value instanceof Date) {
     return value.toISOString().slice(0, 19).replace('T', ' ');
@@ -137,7 +192,7 @@ function normalizeDate(value: unknown): string {
     const d = new Date(ms);
     return d.toISOString().slice(0, 19).replace('T', ' ');
   }
-  return String(value);
+  return parseDayMonthDate(String(value), order) ?? String(value);
 }
 
 /**
@@ -146,7 +201,8 @@ function normalizeDate(value: unknown): string {
  * This is the single definition used by both the browser worker and the
  * serverless API - keep enrichment changes here rather than copying them.
  */
-export function enrichRow(row: IncidentRow): EnrichedIncident {
+export function enrichRow(row: IncidentRow, options: EnrichOptions = {}): EnrichedIncident {
+  const dateOrder = options.dateOrder ?? 'dmy';
   const shortDesc = String(col(row, 'Short description', 'short_description'));
   const desc = String(col(row, 'Description', 'description'));
   const workNotes = String(col(row, 'Work notes', 'work_notes'));
@@ -167,8 +223,8 @@ export function enrichRow(row: IncidentRow): EnrichedIncident {
     'Work notes': workNotes,
     'Assignment group': String(col(row, 'Assignment group', 'assignment_group')),
     'Assigned to': String(col(row, 'Assigned to', 'assigned_to')),
-    Opened: normalizeDate(col(row, 'Opened', 'opened_at')),
-    Closed: normalizeDate(col(row, 'Closed', 'closed_at')),
+    Opened: normalizeDate(col(row, 'Opened', 'opened_at'), dateOrder),
+    Closed: normalizeDate(col(row, 'Closed', 'closed_at'), dateOrder),
     Channel: String(col(row, 'Channel', 'contact_type')),
     'Made SLA': toSlaFlag(col(row, 'Made SLA', 'made_sla')),
     shortDescClean: cleanText(shortDesc),
@@ -184,6 +240,9 @@ const READ_OPTIONS = {
   cellHTML: false,
   cellStyles: false,
   dense: true,
+  // Keep text-format cells (CSV, HTML) as written. Otherwise SheetJS converts
+  // date-looking strings with US month/day rules before we can see them.
+  raw: true,
 } as const;
 
 /**
@@ -230,5 +289,7 @@ export function readIncidentRows(buffer: ArrayBuffer): IncidentRow[] {
 }
 
 export function parseExcelFile(buffer: ArrayBuffer): EnrichedIncident[] {
-  return readIncidentRows(buffer).map(enrichRow);
+  const rows = readIncidentRows(buffer);
+  const dateOrder = inferDateOrder(rows);
+  return rows.map(row => enrichRow(row, { dateOrder }));
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as XLSX from 'xlsx';
-import { enrichRow, parseExcelFile, readIncidentRows } from './parser';
+import { enrichRow, inferDateOrder, parseExcelFile, readIncidentRows } from './parser';
 
 function workbookBuffer(rows: Record<string, unknown>[]): ArrayBuffer {
   const wb = XLSX.utils.book_new();
@@ -190,5 +190,46 @@ describe('CSV text encoding', () => {
     const [inc] = parseExcelFile(fileBuffer(bytes));
 
     expect(inc['Short description']).toBe('Contraseña');
+  });
+});
+
+describe('day/month text dates', () => {
+  it('normalises dd/mm/yyyy text dates', () => {
+    expect(enrichRow({ Opened: '13/03/2025 09:30' }).Opened).toBe('2025-03-13 09:30:00');
+    expect(enrichRow({ Closed: '13-03-2025 09:30:15' }).Closed).toBe('2025-03-13 09:30:15');
+    expect(enrichRow({ Opened: '13.03.2025' }).Opened).toBe('2025-03-13 00:00:00');
+  });
+
+  it('resolves an ambiguous day and month with the file-level order', () => {
+    expect(enrichRow({ Opened: '04/03/2025 09:30:00' }, { dateOrder: 'dmy' }).Opened).toBe('2025-03-04 09:30:00');
+    expect(enrichRow({ Opened: '04/03/2025 09:30:00' }, { dateOrder: 'mdy' }).Opened).toBe('2025-04-03 09:30:00');
+  });
+
+  it('reads a 12-hour clock', () => {
+    expect(enrichRow({ Opened: '03/13/2025 01:05:00 PM' }, { dateOrder: 'mdy' }).Opened).toBe('2025-03-13 13:05:00');
+    expect(enrichRow({ Opened: '13/03/2025 12:10 AM' }).Opened).toBe('2025-03-13 00:10:00');
+  });
+
+  it('leaves ISO, unrecognised and impossible dates as they were', () => {
+    expect(enrichRow({ Opened: '2025-03-04 09:30:00' }).Opened).toBe('2025-03-04 09:30:00');
+    expect(enrichRow({ Opened: '4-Mar-2025' }).Opened).toBe('4-Mar-2025');
+    expect(enrichRow({ Opened: '31/02/2025' }).Opened).toBe('31/02/2025');
+  });
+
+  it('infers the day/month order of a file from its unambiguous dates', () => {
+    expect(inferDateOrder([{ Opened: '04/03/2025' }, { Opened: '13/03/2025' }])).toBe('dmy');
+    expect(inferDateOrder([{ opened_at: '04/03/2025' }, { closed_at: '03/13/2025' }])).toBe('mdy');
+    // Nothing decides it: day first.
+    expect(inferDateOrder([{ Opened: '04/03/2025' }, { Opened: '2025-03-04' }])).toBe('dmy');
+  });
+
+  it('reads CSV dates as written instead of as US month/day', () => {
+    const csv = 'Number,Opened,Closed\r\n'
+      + 'INC0001,04/03/2025 10:00,05/03/2025 11:30\r\n'
+      + 'INC0002,13/03/2025 10:00,14/03/2025 08:00\r\n';
+    const incidents = parseExcelFile(utf8(csv));
+
+    expect(incidents.map(i => i.Opened)).toEqual(['2025-03-04 10:00:00', '2025-03-13 10:00:00']);
+    expect(incidents[0].Closed).toBe('2025-03-05 11:30:00');
   });
 });

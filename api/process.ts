@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import * as XLSX from 'xlsx';
 import { del } from '@vercel/blob';
-import { enrichRow, readWorkbook, type EnrichedIncident, type IncidentRow } from '../src/lib/parser';
+import { enrichRow, inferDateOrder, readWorkbook, type EnrichedIncident, type IncidentRow } from '../src/lib/parser';
 import { scoreIncident, type IncidentScore } from '../src/lib/scorer';
 import {
   computeOverview, computeDimStats, computeFeedback,
@@ -62,16 +62,27 @@ function parseExcelFileChunked(
   if (!headerRow) return;
   const header = headerRow.map(h => String(h));
 
+  const readChunk = (start: number) => XLSX.utils.sheet_to_json<IncidentRow>(sheet, {
+    header,
+    range: { s: { r: start, c: range.s.c }, e: { r: Math.min(start + chunkSize - 1, range.e.r), c: range.e.c } },
+    defval: '',
+  });
+
+  // Day/month order is a property of the whole file, so collect the date cells
+  // first rather than letting each chunk decide on its own.
+  const dateCells: IncidentRow[] = [];
   for (let start = range.s.r + 1; start <= range.e.r; start += chunkSize) {
-    const end = Math.min(start + chunkSize - 1, range.e.r);
-    const rows = XLSX.utils.sheet_to_json<IncidentRow>(sheet, {
-      header,
-      range: { s: { r: start, c: range.s.c }, e: { r: end, c: range.e.c } },
-      defval: '',
-    });
+    for (const row of readChunk(start)) {
+      dateCells.push({ Opened: row.Opened, opened_at: row.opened_at, Closed: row.Closed, closed_at: row.closed_at });
+    }
+  }
+  const dateOrder = inferDateOrder(dateCells);
+
+  for (let start = range.s.r + 1; start <= range.e.r; start += chunkSize) {
+    const rows = readChunk(start);
     if (rows.length === 0) continue;
 
-    const incidents = rows.map(enrichRow);
+    const incidents = rows.map(row => enrichRow(row, { dateOrder }));
     onChunk(incidents, incidents.map(scoreIncident));
   }
 }

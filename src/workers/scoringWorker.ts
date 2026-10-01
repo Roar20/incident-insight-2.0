@@ -5,7 +5,7 @@
  * here — this file only owns the chunking, progress reporting and the memory
  * trimming that keeps very large exports transferable back to the main thread.
  */
-import { enrichRow, readIncidentRows, type EnrichedIncident } from '../lib/parser';
+import { enrichRow, inferDateOrder, readIncidentRows, type EnrichedIncident } from '../lib/parser';
 import { scoreIncident, type IncidentScore } from '../lib/scorer';
 import {
   computeOverview, computeDimStats, computeFeedback,
@@ -65,11 +65,13 @@ self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
     post({ type: 'progress', percent: 15, processed: 0, total: totalRows });
 
     const trimRawFields = totalRows > TRIM_RAW_FIELDS_ABOVE;
+    // Day/month order is a property of the file, so it is decided once up front.
+    const dateOrder = inferDateOrder(rows);
     const incidents: EnrichedIncident[] = [];
     const scores: IncidentScore[] = [];
 
     for (let i = 0; i < totalRows; i++) {
-      const incident = enrichRow(rows[i]);
+      const incident = enrichRow(rows[i], { dateOrder });
       scores.push(scoreIncident(incident));
 
       if (trimRawFields) {
