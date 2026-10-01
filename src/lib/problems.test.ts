@@ -255,6 +255,27 @@ describe('computeProblemClusters', () => {
     expect(cluster.medianResolutionHours).toBe(1.5);
   });
 
+  it('reports SLA breach as unknown when no closed incident records Made SLA', () => {
+    const incidents = annotateIncidents([
+      incident({ shortDescClean: 'VPN connection drops for remote staff', 'Made SLA': null }),
+      incident({ shortDescClean: 'VPN connection drops for remote staff', 'Made SLA': null }),
+    ]);
+    const [cluster] = computeProblemClusters(incidents, incidents.map(i => score(i.Number)));
+
+    expect(cluster.slaBreachPct).toBeNull();
+  });
+
+  it('computes SLA breach only over incidents that record Made SLA', () => {
+    const incidents = annotateIncidents([
+      incident({ shortDescClean: 'VPN connection drops for remote staff', 'Made SLA': false }),
+      incident({ shortDescClean: 'VPN connection drops for remote staff', 'Made SLA': true }),
+      incident({ shortDescClean: 'VPN connection drops for remote staff', 'Made SLA': null }),
+    ]);
+    const [cluster] = computeProblemClusters(incidents, incidents.map(i => score(i.Number)));
+
+    expect(cluster.slaBreachPct).toBe(50);
+  });
+
   it('excludes one-off incidents from the recurring view', () => {
     const incidents = annotateIncidents([
       incident({ shortDescClean: 'A completely unique and singular failure of the widget' }),
@@ -282,6 +303,15 @@ describe('computeCategoryStats', () => {
     expect(vpn.rcaCoverage).toBe(50);
     expect(vpn.slaBreachPct).toBe(50);
     expect(stats.find(s => s.name === 'Printing')!.count).toBe(1);
+  });
+
+  it('reports SLA breach as unknown for a category with no Made SLA values', () => {
+    const incidents = annotateIncidents([
+      incident({ shortDescClean: 'Printer offline on floor 3', 'Made SLA': null }),
+    ]);
+    const [printing] = computeCategoryStats(incidents, incidents.map(i => score(i.Number)));
+
+    expect(printing.slaBreachPct).toBeNull();
   });
 
   it('returns nothing for an empty dataset', () => {

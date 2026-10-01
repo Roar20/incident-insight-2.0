@@ -35,7 +35,8 @@ export default function OverviewPage() {
     const sorted = [...durations].sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
     const closed = incidents.filter(i => i.isClosed);
-    const breached = closed.filter(i => !i['Made SLA']).length;
+    const slaTracked = closed.filter(i => i['Made SLA'] !== null);
+    const breached = slaTracked.filter(i => i['Made SLA'] === false).length;
     const repeatVolume = filteredProblems.reduce((sum, p) => sum + p.count, 0);
 
     return {
@@ -43,7 +44,7 @@ export default function OverviewPage() {
         ? (sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2)
         : null,
       resolvedCount: durations.length,
-      slaBreachPct: closed.length > 0 ? Math.round((breached / closed.length) * 100) : null,
+      slaBreachPct: slaTracked.length > 0 ? Math.round((breached / slaTracked.length) * 100) : null,
       openCount: incidents.length - closed.length,
       recurringPct: incidents.length > 0 ? Math.round((repeatVolume / incidents.length) * 100) : 0,
     };

@@ -105,6 +105,14 @@ describe('enrichRow', () => {
     expect(enrichRow({})['Task type']).toBe('Incident');
   });
 
+  it('reads Made SLA as unknown when the column or the cell is empty', () => {
+    expect(enrichRow({})['Made SLA']).toBeNull();
+    expect(enrichRow({ 'Made SLA': '' })['Made SLA']).toBeNull();
+    expect(enrichRow({ made_sla: 'false' })['Made SLA']).toBe(false);
+    expect(enrichRow({ 'Made SLA': 'TRUE' })['Made SLA']).toBe(true);
+    expect(enrichRow({ 'Made SLA': false })['Made SLA']).toBe(false);
+  });
+
   it('detects auto-generated monitoring descriptions', () => {
     expect(enrichRow({ Description: 'Alert triggered at 03:15 UTC. Pod name: api-7f9' }).isAutoDesc).toBe(true);
     expect(enrichRow({ Description: 'User reports the VPN client disconnects hourly.' }).isAutoDesc).toBe(false);

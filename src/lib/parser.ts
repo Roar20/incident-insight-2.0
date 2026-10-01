@@ -13,7 +13,8 @@ export interface RawIncident {
   Opened: string;
   Closed: string;
   Channel: string;
-  'Made SLA': boolean;
+  /** Null when the export has no Made SLA column or leaves the cell blank. */
+  'Made SLA': boolean | null;
 }
 
 export interface NoteEntry {
@@ -113,6 +114,18 @@ function toBool(value: unknown): boolean {
   return Boolean(value);
 }
 
+/**
+ * Made SLA as recorded, or null when the export does not say.
+ *
+ * A missing column or blank cell is unknown, not a breach: reading it as false
+ * reported every closed incident as having missed SLA.
+ */
+function toSlaFlag(value: unknown): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  return toBool(value);
+}
+
 function normalizeDate(value: unknown): string {
   if (!value) return '';
   if (value instanceof Date) {
@@ -157,7 +170,7 @@ export function enrichRow(row: IncidentRow): EnrichedIncident {
     Opened: normalizeDate(col(row, 'Opened', 'opened_at')),
     Closed: normalizeDate(col(row, 'Closed', 'closed_at')),
     Channel: String(col(row, 'Channel', 'contact_type')),
-    'Made SLA': toBool(col(row, 'Made SLA', 'made_sla')),
+    'Made SLA': toSlaFlag(col(row, 'Made SLA', 'made_sla')),
     shortDescClean: cleanText(shortDesc),
     descClean: cleanText(desc),
     allNotes,

@@ -27,7 +27,7 @@ export interface PeriodTrend {
   highNoisePct: number;
   /** Typical time to resolve, in hours. Null when nothing in the period closed. */
   medianResolutionHours: number | null;
-  /** Share of closed incidents that missed SLA. Null when nothing closed. */
+  /** Share of closed incidents that missed SLA. Null when no closed incident records Made SLA. */
   slaBreachPct: number | null;
   /** Share of incidents with a root cause actually written down. */
   rcaCoveragePct: number;
@@ -94,6 +94,7 @@ export function computePeriodTrends(
       const critical = ms.filter(s => s.label === 'Critical').length;
 
       const closed = incs.filter(i => i.isClosed);
+      const slaTracked = closed.filter(i => i['Made SLA'] !== null);
       const durations = incs.filter(i => i.resolutionHours !== null).map(i => i.resolutionHours!);
 
       return {
@@ -115,7 +116,7 @@ export function computePeriodTrends(
         noRootCausePct: wholePct(ms.filter(s => s.dimScores.root_cause === 0).length, count),
         highNoisePct: wholePct(ms.filter(s => s.noiseRatio > 0.5).length, count),
         medianResolutionHours: median(durations),
-        slaBreachPct: closed.length > 0 ? wholePct(closed.filter(i => !i['Made SLA']).length, closed.length) : null,
+        slaBreachPct: slaTracked.length > 0 ? wholePct(slaTracked.filter(i => i['Made SLA'] === false).length, slaTracked.length) : null,
         rcaCoveragePct: wholePct(incs.filter(i => i.rootCauseText).length, incs.length),
         openCount: incs.length - closed.length,
       };
