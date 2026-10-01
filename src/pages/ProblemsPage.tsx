@@ -5,7 +5,10 @@ import {
 } from '@/components/ui/dashboard-primitives';
 import MonthFilter from '@/components/MonthFilter';
 import ProblemModal from '@/components/ProblemModal';
+import ExportButton from '@/components/ExportButton';
+import { useProblemExport } from '@/hooks/useProblemExport';
 import type { ProblemCluster, ActionKind } from '@/lib/problems';
+import { filterVisibleProblems, type ProblemListFilters } from '@/lib/problemView';
 import { formatDuration } from '@/lib/periods';
 import { Search, AlertTriangle, Bot, HelpCircle, Repeat } from 'lucide-react';
 
@@ -34,16 +37,18 @@ export default function ProblemsPage() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [onlyUndocumented, setOnlyUndocumented] = useState(false);
   const [selected, setSelected] = useState<ProblemCluster | null>(null);
+  const { exportProblems, exporting } = useProblemExport();
 
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return filteredProblems.filter(p => {
-      if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
-      if (onlyUndocumented && p.rcaCoverage >= 50) return false;
-      if (q && !p.title.toLowerCase().includes(q) && !p.category.toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [filteredProblems, search, categoryFilter, onlyUndocumented]);
+  const listFilters = useMemo<ProblemListFilters>(
+    () => ({ search, category: categoryFilter, onlyUndocumented }),
+    [search, categoryFilter, onlyUndocumented],
+  );
+
+  // The export reuses this exact list, so it always matches the table.
+  const visible = useMemo(
+    () => filterVisibleProblems(filteredProblems, listFilters),
+    [filteredProblems, listFilters],
+  );
 
   const totals = useMemo(() => {
     const recurring = filteredProblems.reduce((sum, p) => sum + p.count, 0);
@@ -178,6 +183,12 @@ export default function ProblemsPage() {
           Undocumented only
         </label>
         <div className="text-[12px] text-muted-foreground self-center ml-auto font-medium">{visible.length} problems</div>
+        <ExportButton
+          onClick={() => exportProblems('view', visible, listFilters)}
+          busy={exporting}
+          disabled={visible.length === 0}
+          title="Export the problems listed below, with all their incidents, to XLSX"
+        />
       </div>
 
       {visible.length === 0 ? (
@@ -223,7 +234,14 @@ export default function ProblemsPage() {
         </div>
       )}
 
-      {selected && <ProblemModal cluster={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <ProblemModal
+          cluster={selected}
+          onClose={() => setSelected(null)}
+          onExport={() => exportProblems('problem', [selected], listFilters)}
+          exporting={exporting}
+        />
+      )}
     </div>
   );
 }

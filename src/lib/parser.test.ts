@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as XLSX from 'xlsx';
-import { enrichRow, inferDateOrder, parseExcelFile, readIncidentRows } from './parser';
+import { enrichRow, inferDateOrder, isMappedColumn, parseExcelFile, readIncidentRows, readIncidentTable } from './parser';
 
 function workbookBuffer(rows: Record<string, unknown>[]): ArrayBuffer {
   const wb = XLSX.utils.book_new();
@@ -306,5 +306,94 @@ describe('work-note journal splitting', () => {
 
     expect(inc.allNotes).toHaveLength(1);
     expect(inc.allNotes[0].text).toBe('Logs show the crash at 2025-03-04 08:55:00 - see (attached).');
+  });
+});
+
+describe('unmapped source columns', () => {
+  const MAPPED = [
+    'Number', 'Task type', 'Priority', 'State', 'Short description', 'Description', 'Work notes',
+    'Assignment group', 'Assigned to', 'Opened', 'Closed', 'Channel', 'Made SLA',
+    'number', 'sys_class_name', 'priority', 'state', 'short_description', 'description', 'work_notes',
+    'assignment_group', 'assigned_to', 'opened_at', 'closed_at', 'contact_type', 'made_sla',
+  ];
+
+  it('treats every display name and field name the model reads as mapped', () => {
+    for (const header of MAPPED) expect(isMappedColumn(header), header).toBe(true);
+    expect(isMappedColumn('Service offering')).toBe(false);
+    expect(isMappedColumn('Resolution code')).toBe(false);
+  });
+
+  it('keeps unmapped columns verbatim in extraFields, in source order', () => {
+    const inc = enrichRow({
+      Number: 'INC0001',
+      Service: 'SAP PI/PO',
+      Channel: 'Phone',
+      'Service offering': 'Middleware - Gold',
+      'Resolution code': 'Solved (Work Around)',
+      'Reassignment count': 2,
+      Code: '007',
+    });
+    expect(inc.extraFields).toEqual({
+      Service: 'SAP PI/PO',
+      'Service offering': 'Middleware - Gold',
+      'Resolution code': 'Solved (Work Around)',
+      'Reassignment count': 2,
+      Code: '007',
+    });
+    expect(Object.keys(inc.extraFields!)).toEqual(['Service', 'Service offering', 'Resolution code', 'Reassignment count', 'Code']);
+    // Channel is canonical: read into the model, never duplicated as an extra.
+    expect(inc.Channel).toBe('Phone');
+  });
+
+  it('does not copy snake_case mapped columns into extraFields', () => {
+    const inc = enrichRow({ number: 'INC0002', contact_type: 'Email', short_description: 'x' });
+    expect(inc.Channel).toBe('Email');
+    expect(inc.extraFields).toBeUndefined();
+  });
+
+  it('leaves extraFields out when every column is mapped', () => {
+    expect(enrichRow({ Number: 'INC0003', State: 'Closed' }).extraFields).toBeUndefined();
+  });
+
+  it('does not change the canonical fields or the cleaned text', () => {
+    const row = { Number: 'INC0004', 'Short description': 'VPN down', Description: 'Body', State: 'Closed' };
+    const plain = enrichRow(row);
+    const withExtras = enrichRow({ ...row, Service: 'Network' });
+    const { extraFields, ...rest } = withExtras;
+    expect(extraFields).toEqual({ Service: 'Network' });
+    expect(rest).toEqual(plain);
+  });
+});
+
+describe('readIncidentTable', () => {
+  it('returns the source columns in order, flagging which are mapped', () => {
+    const { rows, columns } = readIncidentTable(workbookBuffer([
+      { Number: 'INC0001', Service: 'SAP', State: 'Closed', 'Resolution code': 'Solved' },
+    ]));
+    expect(rows).toHaveLength(1);
+    expect(columns).toEqual([
+      { name: 'Number', mapped: true },
+      { name: 'Service', mapped: false },
+      { name: 'State', mapped: true },
+      { name: 'Resolution code', mapped: false },
+    ]);
+  });
+
+  it("records an unmapped numeric column's number format so dates can be written back as dates", () => {
+    const sheet = XLSX.utils.aoa_to_sheet([['Number', 'Resolved', 'Cost'], ['INC0001', 46085.5, 12.5]]);
+    sheet.B2.z = 'yyyy-mm-dd hh:mm';
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'Incidents');
+    const { rows, columns } = readIncidentTable(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer);
+    expect(rows[0].Resolved).toBe(46085.5);
+    expect(columns).toEqual([
+      { name: 'Number', mapped: true },
+      { name: 'Resolved', mapped: false, numFmt: 'yyyy-mm-dd hh:mm' },
+      { name: 'Cost', mapped: false },
+    ]);
+  });
+
+  it('returns no columns for an empty sheet', () => {
+    expect(readIncidentTable(workbookBuffer([]))).toEqual({ rows: [], columns: [] });
   });
 });

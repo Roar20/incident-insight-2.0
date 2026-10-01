@@ -30,6 +30,12 @@ export interface EnrichedIncident extends RawIncident {
   allNotes: NoteEntry[];
   humanNotes: NoteEntry[];
   isAutoDesc: boolean;
+  /**
+   * Source columns the canonical model does not map, keyed by their original
+   * header and holding the cell value exactly as read. Absent when the export
+   * has no such columns.
+   */
+  extraFields?: Record<string, unknown>;
 }
 
 /**
@@ -103,8 +109,46 @@ function parseNotes(raw: string): NoteEntry[] {
 /** One raw spreadsheet row, keyed by whatever headers the export happened to use. */
 export type IncidentRow = Record<string, unknown>;
 
+/**
+ * Source headers read into each canonical field: the ServiceNow display name
+ * first, then the field name. Every header listed here is mapped; any other
+ * column is kept verbatim in `extraFields`.
+ */
+const SOURCE_COLUMNS = {
+  Number: ['Number', 'number'],
+  'Task type': ['Task type', 'sys_class_name'],
+  Priority: ['Priority', 'priority'],
+  State: ['State', 'state'],
+  'Short description': ['Short description', 'short_description'],
+  Description: ['Description', 'description'],
+  'Work notes': ['Work notes', 'work_notes'],
+  'Assignment group': ['Assignment group', 'assignment_group'],
+  'Assigned to': ['Assigned to', 'assigned_to'],
+  Opened: ['Opened', 'opened_at'],
+  Closed: ['Closed', 'closed_at'],
+  Channel: ['Channel', 'contact_type'],
+  'Made SLA': ['Made SLA', 'made_sla'],
+} as const satisfies Record<keyof RawIncident, readonly string[]>;
+
+const MAPPED_HEADERS: ReadonlySet<string> = new Set(Object.values(SOURCE_COLUMNS).flat());
+
+/** True when a source header is read into the canonical model. */
+export function isMappedColumn(header: string): boolean {
+  return MAPPED_HEADERS.has(header);
+}
+
+/** The row's unmapped columns, in source order, or undefined when there are none. */
+function unmappedFields(row: IncidentRow): Record<string, unknown> | undefined {
+  let extra: Record<string, unknown> | undefined;
+  for (const key of Object.keys(row)) {
+    if (MAPPED_HEADERS.has(key)) continue;
+    (extra ??= {})[key] = row[key];
+  }
+  return extra;
+}
+
 /** First present value among `keys`, so display names and field names both work. */
-function col(row: IncidentRow, ...keys: string[]): unknown {
+function col(row: IncidentRow, keys: readonly string[]): unknown {
   for (const k of keys) {
     if (row[k] !== undefined) return row[k];
   }
@@ -150,7 +194,7 @@ export interface EnrichOptions {
 /** dd/mm/yyyy or mm/dd/yyyy (/, - or . separated), optional time and AM/PM. */
 const DAY_MONTH_RE = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?)?$/;
 
-const DATE_COLUMNS = ['Opened', 'opened_at', 'Closed', 'closed_at'];
+const DATE_COLUMNS = [...SOURCE_COLUMNS.Opened, ...SOURCE_COLUMNS.Closed];
 
 /**
  * Decide whether a file writes text dates day-first or month-first.
@@ -216,35 +260,37 @@ function normalizeDate(value: unknown, order: DateOrder): string {
  */
 export function enrichRow(row: IncidentRow, options: EnrichOptions = {}): EnrichedIncident {
   const dateOrder = options.dateOrder ?? 'dmy';
-  const shortDesc = String(col(row, 'Short description', 'short_description'));
-  const desc = String(col(row, 'Description', 'description'));
-  const workNotes = String(col(row, 'Work notes', 'work_notes'));
+  const shortDesc = String(col(row, SOURCE_COLUMNS['Short description']));
+  const desc = String(col(row, SOURCE_COLUMNS.Description));
+  const workNotes = String(col(row, SOURCE_COLUMNS['Work notes']));
   const allNotes = parseNotes(workNotes);
   const humanNotes = allNotes.filter(n => !n.isSystem);
+  const extraFields = unmappedFields(row);
 
   return {
-    Number: String(col(row, 'Number', 'number')),
-    'Task type': String(col(row, 'Task type', 'sys_class_name') || 'Incident'),
-    Priority: String(col(row, 'Priority', 'priority'))
+    Number: String(col(row, SOURCE_COLUMNS.Number)),
+    'Task type': String(col(row, SOURCE_COLUMNS['Task type']) || 'Incident'),
+    Priority: String(col(row, SOURCE_COLUMNS.Priority))
       .replace(/\u00e2\u20ac\u201c/g, '\u2013')
       .replace(/\u00e2\u20ac\u0153/g, '\u201c')
       .replace(/\u00e2\u20ac\u009d/g, '\u201d')
       .trim(),
-    State: String(col(row, 'State', 'state')),
+    State: String(col(row, SOURCE_COLUMNS.State)),
     'Short description': shortDesc,
     Description: desc,
     'Work notes': workNotes,
-    'Assignment group': String(col(row, 'Assignment group', 'assignment_group')),
-    'Assigned to': String(col(row, 'Assigned to', 'assigned_to')),
-    Opened: normalizeDate(col(row, 'Opened', 'opened_at'), dateOrder),
-    Closed: normalizeDate(col(row, 'Closed', 'closed_at'), dateOrder),
-    Channel: String(col(row, 'Channel', 'contact_type')),
-    'Made SLA': toSlaFlag(col(row, 'Made SLA', 'made_sla')),
+    'Assignment group': String(col(row, SOURCE_COLUMNS['Assignment group'])),
+    'Assigned to': String(col(row, SOURCE_COLUMNS['Assigned to'])),
+    Opened: normalizeDate(col(row, SOURCE_COLUMNS.Opened), dateOrder),
+    Closed: normalizeDate(col(row, SOURCE_COLUMNS.Closed), dateOrder),
+    Channel: String(col(row, SOURCE_COLUMNS.Channel)),
+    'Made SLA': toSlaFlag(col(row, SOURCE_COLUMNS['Made SLA'])),
     shortDescClean: cleanText(shortDesc),
     descClean: cleanText(desc),
     allNotes,
     humanNotes,
     isAutoDesc: isAutoDescription(desc),
+    ...(extraFields && { extraFields }),
   };
 }
 
@@ -253,6 +299,8 @@ const READ_OPTIONS = {
   cellHTML: false,
   cellStyles: false,
   dense: true,
+  // Number formats, so an unmapped date column can be written back as a date.
+  cellNF: true,
   // Keep text-format cells (CSV, HTML) as written. Otherwise SheetJS converts
   // date-looking strings with US month/day rules before we can see them.
   raw: true,
@@ -293,12 +341,59 @@ export function readWorkbook(buffer: ArrayBuffer): XLSX.WorkBook {
   return XLSX.read(decodeText(bytes), { type: 'string', ...READ_OPTIONS });
 }
 
-/** Read the first sheet of a workbook into plain header-keyed rows. */
-export function readIncidentRows(buffer: ArrayBuffer): IncidentRow[] {
+/** One column of the source sheet, in its original position. */
+export interface SourceColumn {
+  /** Header as the rows key it (SheetJS renames blanks and duplicates). */
+  name: string;
+  /** Read into the canonical model rather than kept in `extraFields`. */
+  mapped: boolean;
+  /** Excel number format of the column's first formatted numeric cell, if any. */
+  numFmt?: string;
+}
+
+export interface IncidentTable {
+  rows: IncidentRow[];
+  /** Every column of the sheet, in source order. */
+  columns: SourceColumn[];
+}
+
+/** First non-General number format among the numeric cells of one column. */
+function columnNumberFormat(sheet: XLSX.WorkSheet, col: number, firstRow: number, lastRow: number): string | undefined {
+  const dense = sheet as unknown as XLSX.CellObject[][];
+  for (let r = firstRow; r <= lastRow; r++) {
+    const cell = dense[r]?.[col];
+    if (cell?.t === 'n' && typeof cell.z === 'string' && cell.z !== 'General') return cell.z;
+  }
+  return undefined;
+}
+
+/**
+ * Read the first sheet into header-keyed rows plus its column layout.
+ *
+ * The layout keeps the source column order and, for unmapped numeric columns,
+ * the number format, so an export can rebuild those columns as they were.
+ */
+export function readIncidentTable(buffer: ArrayBuffer): IncidentTable {
   const wb = readWorkbook(buffer);
   const sheetName = wb.SheetNames[0];
-  if (!sheetName) return [];
-  return XLSX.utils.sheet_to_json<IncidentRow>(wb.Sheets[sheetName], { defval: '' });
+  if (!sheetName) return { rows: [], columns: [] };
+  const sheet = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<IncidentRow>(sheet, { defval: '' });
+  if (rows.length === 0 || !sheet['!ref']) return { rows, columns: [] };
+
+  // With `defval` every row carries every header, in sheet column order.
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const columns = Object.keys(rows[0]).map((name, i): SourceColumn => {
+    const mapped = MAPPED_HEADERS.has(name);
+    const numFmt = mapped ? undefined : columnNumberFormat(sheet, range.s.c + i, range.s.r + 1, range.e.r);
+    return numFmt ? { name, mapped, numFmt } : { name, mapped };
+  });
+  return { rows, columns };
+}
+
+/** Read the first sheet of a workbook into plain header-keyed rows. */
+export function readIncidentRows(buffer: ArrayBuffer): IncidentRow[] {
+  return readIncidentTable(buffer).rows;
 }
 
 export function parseExcelFile(buffer: ArrayBuffer): EnrichedIncident[] {

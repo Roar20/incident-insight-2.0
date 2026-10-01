@@ -5,7 +5,7 @@
  * here — this file only owns the chunking, progress reporting and the memory
  * trimming that keeps very large exports transferable back to the main thread.
  */
-import { enrichRow, inferDateOrder, readIncidentRows, type EnrichedIncident } from '../lib/parser';
+import { enrichRow, inferDateOrder, readIncidentTable, type EnrichedIncident, type SourceColumn } from '../lib/parser';
 import { scoreIncident, type IncidentScore } from '../lib/scorer';
 import {
   computeOverview, computeDimStats, computeFeedback,
@@ -28,6 +28,10 @@ export interface WorkerResult {
   agentStats: AgentStat[];
   groupStats: GroupStat[];
   fileName: string;
+  /** Source columns in their original order, so exports can rebuild them. */
+  sourceColumns: SourceColumn[];
+  /** True when raw Description and Work notes were dropped to save memory. */
+  rawTextTrimmed: boolean;
 }
 
 export type WorkerMessage =
@@ -59,7 +63,7 @@ self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
   try {
     post({ type: 'progress', percent: 5, processed: 0, total: 0 });
 
-    const rows = readIncidentRows(buffer);
+    const { rows, columns: sourceColumns } = readIncidentTable(buffer);
     const totalRows = rows.length;
 
     post({ type: 'progress', percent: 15, processed: 0, total: totalRows });
@@ -114,6 +118,8 @@ self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
       agentStats: computeAgentStats(annotated, scores),
       groupStats: computeGroupStats(annotated, scores),
       fileName: name,
+      sourceColumns,
+      rawTextTrimmed: trimRawFields,
     };
 
     post({ type: 'progress', percent: 97, processed: totalRows, total: totalRows });

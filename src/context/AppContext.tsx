@@ -9,6 +9,8 @@ import type { AnnotatedIncident, ProblemCluster, CategoryStat, ProblemAction } f
 import { computeProblemClusters, computeCategoryStats, recommendActions } from '@/lib/problems';
 import { computePeriodTrends, type PeriodTrend } from '@/lib/trends';
 import { availableWeeks } from '@/lib/weekly';
+import type { SourceColumn } from '@/lib/parser';
+import { filterByMonths } from '@/lib/problemView';
 import type { WorkerMessage } from '@/workers/scoringWorker';
 
 export interface MonthOption {
@@ -31,6 +33,10 @@ interface AppState {
   loadingProgress: number;
   loadingMessage: string;
   fileName: string;
+  /** Source columns in their original order, for exports. */
+  sourceColumns: SourceColumn[];
+  /** True when the worker dropped raw Description and Work notes to save memory. */
+  rawTextTrimmed: boolean;
   availableMonths: MonthOption[];
   selectedMonths: string[];
   availableWeeks: string[];
@@ -81,6 +87,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadingProgress: 0,
     loadingMessage: '',
     fileName: '',
+    sourceColumns: [],
+    rawTextTrimmed: false,
     availableMonths: [],
     selectedMonths: [],
     availableWeeks: [],
@@ -130,7 +138,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (msg.type === 'result') {
-          const { incidents, scores, overview, dimStats, feedbackItems, agentStats, groupStats } = msg.payload;
+          const {
+            incidents, scores, overview, dimStats, feedbackItems, agentStats, groupStats,
+            sourceColumns, rawTextTrimmed,
+          } = msg.payload;
 
           const monthSet = new Set<string>();
           for (const inc of incidents) {
@@ -148,7 +159,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ...prev,
             incidents, scores, overview, dimStats, feedbackItems,
             agentStats, groupStats, loaded: true, loading: false,
-            fileName: name, currentPage: 'overview',
+            fileName: name, sourceColumns, rawTextTrimmed, currentPage: 'overview',
             availableMonths, selectedMonths: [],
             // Default the weekly review to the most recent complete week of data.
             availableWeeks: weeks, selectedWeek: weeks[weeks.length - 1] ?? '',
@@ -217,8 +228,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const filteredIncidents = useMemo(() => {
     if (!isMonthFiltered) return state.incidents;
-    const selected = new Set(state.selectedMonths);
-    return state.incidents.filter(inc => selected.has(parseMonthKey(inc.Opened)));
+    return filterByMonths(state.incidents, state.selectedMonths);
   }, [state.incidents, state.selectedMonths, isMonthFiltered]);
 
   const filteredScores = useMemo(() => {

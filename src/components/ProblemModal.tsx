@@ -1,5 +1,6 @@
 import type { ProblemCluster } from '@/lib/problems';
 import { getScoreColor } from '@/components/ui/dashboard-primitives';
+import ExportButton from '@/components/ExportButton';
 import { formatDuration } from '@/lib/periods';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,6 +8,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 interface Props {
   cluster: ProblemCluster;
   onClose: () => void;
+  /** Export this problem and its incidents; the button is hidden without it. */
+  onExport?: () => void;
+  exporting?: boolean;
 }
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
@@ -18,7 +22,7 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-export default function ProblemModal({ cluster, onClose }: Props) {
+export default function ProblemModal({ cluster, onClose, onExport, exporting = false }: Props) {
   const undocumented = cluster.count - cluster.documentedCount;
 
   return (
@@ -45,9 +49,14 @@ export default function ProblemModal({ cluster, onClose }: Props) {
               </div>
               <h2 className="text-[16px] font-medium text-card-foreground leading-snug">{cluster.title}</h2>
             </div>
-            <button onClick={onClose} className="text-card-foreground/50 hover:text-card-foreground p-1 transition-colors shrink-0">
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {onExport && (
+                <ExportButton onClick={onExport} busy={exporting} title="Export this problem and all its incidents to XLSX" />
+              )}
+              <button onClick={onClose} className="text-card-foreground/50 hover:text-card-foreground p-1 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           <div className="p-5 space-y-6">
