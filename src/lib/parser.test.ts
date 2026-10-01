@@ -397,3 +397,56 @@ describe('readIncidentTable', () => {
     expect(readIncidentTable(workbookBuffer([]))).toEqual({ rows: [], columns: [] });
   });
 });
+
+describe('Excel serial dates (F-25)', () => {
+  const EPOCH = Date.UTC(1899, 11, 30);
+  /** The serial Excel stores for a UTC wall-clock time: fractional days since 1899-12-30. */
+  const serialOf = (iso: string) => (Date.parse(`${iso.replace(' ', 'T')}Z`) - EPOCH) / 86_400_000;
+
+  it('reads a serial whose float product falls just short of the second without losing that second', () => {
+    // 46291.9687037037 * 86400000 lands 0.0005 ms before 23:14:56.
+    expect(serialOf('2026-09-26 23:14:56')).toBe(46291.9687037037);
+    expect(enrichRow({ Opened: serialOf('2026-09-26 23:14:56') }).Opened).toBe('2026-09-26 23:14:56');
+    expect(enrichRow({ Closed: serialOf('2026-09-01 00:00:07') }).Closed).toBe('2026-09-01 00:00:07');
+  });
+
+  it('keeps midnight on its own day', () => {
+    expect(enrichRow({ Opened: serialOf('2026-03-01 00:00:00') }).Opened).toBe('2026-03-01 00:00:00');
+    expect(enrichRow({ Opened: 46082 }).Opened).toBe('2026-03-01 00:00:00');
+  });
+
+  it('keeps 23:59:59 on the last day of the month, without rolling into the next day or month', () => {
+    for (const iso of ['2026-01-31 23:59:59', '2026-02-28 23:59:59', '2025-12-31 23:59:59', '2024-02-29 23:59:59']) {
+      expect(enrichRow({ Closed: serialOf(iso) }).Closed, iso).toBe(iso);
+    }
+  });
+
+  it('reads every second of a day exactly', () => {
+    const wrong: string[] = [];
+    for (let s = 0; s < 86_400; s++) {
+      const iso = new Date(Date.UTC(2026, 8, 26) + s * 1000).toISOString().slice(0, 19).replace('T', ' ');
+      const read = enrichRow({ Opened: serialOf(iso) }).Opened;
+      if (read !== iso) wrong.push(`${iso} -> ${read}`);
+    }
+    expect(wrong.slice(0, 5)).toEqual([]);
+  });
+
+  it('reads date-typed cells from an xlsx file exactly, in canonical and unmapped columns', () => {
+    const times = ['2026-09-26 23:14:56', '2026-09-01 00:00:07', '2026-01-31 23:59:59', '2026-03-01 00:00:00'];
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['Number', 'Opened', 'Closed', 'Resolved'],
+      ...times.map((t, i) => [`INC${i}`, serialOf(t), serialOf(t), serialOf(t)]),
+    ]);
+    for (let r = 1; r <= times.length; r++) {
+      for (const c of [1, 2, 3]) sheet[XLSX.utils.encode_cell({ r, c })].z = 'yyyy-mm-dd hh:mm:ss';
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'Incidents');
+    const incidents = parseExcelFile(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer);
+
+    expect(incidents.map(i => i.Opened)).toEqual(times);
+    expect(incidents.map(i => i.Closed)).toEqual(times);
+    // The unmapped column keeps the serial as stored; its date is that serial, not one second earlier.
+    incidents.forEach((inc, i) => expect(inc.extraFields?.Resolved).toBeCloseTo(serialOf(times[i]), 9));
+  });
+});

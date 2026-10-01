@@ -244,9 +244,13 @@ function normalizeDate(value: unknown, order: DateOrder): string {
     return value.toISOString().slice(0, 19).replace('T', ' ');
   }
   if (typeof value === 'number') {
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    const ms = epoch.getTime() + value * 86400000;
-    const d = new Date(ms);
+    // An Excel serial is fractional days, and most times of day are not exact in
+    // binary: 23:14:56 is stored as 46291.9687037037, whose product with
+    // 86,400,000 lands a fraction of a millisecond *before* the second. Slicing
+    // the ISO string then truncated it to 23:14:55. Round to the nearest whole
+    // second — the precision of this format and of Excel's hh:mm:ss display.
+    const seconds = Math.round(value * 86400);
+    const d = new Date(Date.UTC(1899, 11, 30) + seconds * 1000);
     return d.toISOString().slice(0, 19).replace('T', ' ');
   }
   return parseDayMonthDate(String(value), order) ?? String(value);

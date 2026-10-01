@@ -363,3 +363,57 @@ describe('exportFileName', () => {
   });
 });
 
+
+describe('date round trip: xlsx -> parser -> export -> xlsx (F-25)', () => {
+  const EPOCH = Date.UTC(1899, 11, 30);
+  const serialOf = (iso: string) => (Date.parse(`${iso.replace(' ', 'T')}Z`) - EPOCH) / 86_400_000;
+  const OPENED = ['2026-09-26 23:14:56', '2026-09-01 00:00:07', '2026-01-31 23:59:59', '2026-03-01 00:00:00'];
+  const CLOSED = ['2026-09-27 01:02:03', '2026-09-01 00:00:08', '2026-02-01 00:00:00', '2026-03-01 23:59:59'];
+
+  function exportDates() {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['Number', 'Short description', 'State', 'Opened', 'Closed', 'Resolved'],
+      ...OPENED.map((o, i) => [`INC${i}`, 'SAP PI message stuck in queue', 'Closed', serialOf(o), serialOf(CLOSED[i]), serialOf(CLOSED[i])]),
+    ]);
+    for (let r = 1; r <= OPENED.length; r++) {
+      for (const c of [3, 4, 5]) sheet[XLSX.utils.encode_cell({ r, c })].z = 'yyyy-mm-dd hh:mm:ss';
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'Page 1');
+    const written = new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }));
+    const buffer = new ArrayBuffer(written.byteLength);
+    new Uint8Array(buffer).set(written);
+
+    const { rows, columns } = readIncidentTable(buffer);
+    const enriched = rows.map(r => enrichRow(r, { dateOrder: inferDateOrder(rows) }));
+    const scores = enriched.map(scoreIncident);
+    const incidents = annotateIncidents(enriched);
+    const problems = computeProblemClusters(incidents, scores);
+    expect(problems).toHaveLength(1);
+    const { workbook } = buildProblemsWorkbook({
+      scope: 'view', problems, incidents, scores, sourceColumns: columns, fileName: 'dates.xlsx',
+      exportedAt: EXPORTED_AT, selectedMonths: [], listFilters: NO_LIST_FILTERS, rawTextTrimmed: false,
+    });
+    return { incidents, ...roundTrip(workbook) };
+  }
+
+  it('keeps every Opened and Closed exactly as yyyy-mm-dd hh:mm:ss', () => {
+    const { incidents, detail } = exportDates();
+    const [header, ...rows] = detail;
+    expect(incidents.map(i => i.Opened)).toEqual(OPENED);
+    const byNumber = new Map(rows.map(r => [r[col(header, 'Number')], r]));
+    OPENED.forEach((o, i) => {
+      const row = byNumber.get(`INC${i}`)!;
+      expect(shownAsText(row[col(header, 'Opened')])).toBe(o);
+      expect(shownAsText(row[col(header, 'Closed')])).toBe(CLOSED[i]);
+    });
+  });
+});
+
+/** A Detalle date cell as the user reads it, whether stored as text or as an Excel date. */
+function shownAsText(value: unknown): string {
+  if (typeof value === 'number') {
+    return new Date(Math.round((value * 86_400 + Date.UTC(1899, 11, 30) / 1000)) * 1000).toISOString().slice(0, 19).replace('T', ' ');
+  }
+  return String(value);
+}
