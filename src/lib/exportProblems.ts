@@ -7,7 +7,7 @@
  */
 import * as XLSX from 'xlsx';
 import { monthLabel } from './analytics';
-import type { SourceColumn } from './parser';
+import { ISO_DATE_TEXT_RE, type SourceColumn } from './parser';
 import { formatDuration } from './periods';
 import type { ProblemListFilters } from './problemView';
 import type { AnnotatedIncident, NamedCount, ProblemCluster } from './problems';
@@ -20,6 +20,9 @@ export const SHEET_METADATA = 'Metadatos';
 
 /** Most characters Excel accepts in one cell. */
 export const EXCEL_CELL_LIMIT = 32_767;
+
+/** Display format of every date cell the export writes. */
+export const DATE_FORMAT = 'yyyy-mm-dd hh:mm:ss';
 
 /** Written in place of Description / Work notes the worker dropped to save memory. */
 export const RAW_TEXT_UNAVAILABLE =
@@ -100,6 +103,39 @@ function openedRange(incidents: AnnotatedIncident[]): string {
   return first ? `${first} → ${last}` : '—';
 }
 
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+
+/**
+ * An Excel date serial for ISO date text, read as written (no time zone shift),
+ * or null when the text is not an ISO date.
+ */
+export function isoTextToSerial(text: string): number | null {
+  if (!ISO_DATE_TEXT_RE.test(text)) return null;
+  const [y, mo, d, h = 0, mi = 0, se = 0] = text.split(/[- :]/).map(Number);
+  return (Date.UTC(y, mo - 1, d, h, mi, se) - EXCEL_EPOCH_MS) / 86_400_000;
+}
+
+/** A date as an Excel serial; text that is not an ISO date is returned unchanged. */
+function asDate(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  return isoTextToSerial(value.trim()) ?? value;
+}
+
+/** A number as an Excel number; text that is not plain decimal is returned unchanged. */
+function asNumber(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  return /^-?(?:0|[1-9]\d{0,14})(?:\.\d+)?$/.test(text) ? Number(text) : value;
+}
+
+/** Give every numeric cell of one column a number format. */
+function formatColumn(sheet: XLSX.WorkSheet, rowCount: number, c: number, format: string): void {
+  for (let r = 1; r < rowCount; r++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined;
+    if (cell?.t === 'n') cell.z = format;
+  }
+}
+
 /** Build the three-sheet workbook. Pure: no download, no globals. */
 export function buildProblemsWorkbook(input: ProblemExportInput): ProblemExport {
   let truncatedCells = 0;
@@ -125,7 +161,7 @@ export function buildProblemsWorkbook(input: ProblemExportInput): ProblemExport 
       formatDuration(p.medianResolutionHours), p.medianResolutionHours,
       p.slaBreachPct, p.avgScore, formatRootCauses(p),
       formatCounts(p.topGroups), formatCounts(p.topAgents),
-      p.firstSeen, p.lastSeen,
+      asDate(p.firstSeen), asDate(p.lastSeen),
     ].map(fit));
   }
 
@@ -144,6 +180,7 @@ export function buildProblemsWorkbook(input: ProblemExportInput): ProblemExport 
       const score = scoreByNumber.get(inc.Number);
       const canonical = CANONICAL_COLUMNS.map(key => {
         if (input.rawTextTrimmed && (key === 'Description' || key === 'Work notes')) return RAW_TEXT_UNAVAILABLE;
+        if (key === 'Opened' || key === 'Closed') return asDate(inc[key]);
         return inc[key];
       });
       detailRows.push([
@@ -155,7 +192,12 @@ export function buildProblemsWorkbook(input: ProblemExportInput): ProblemExport 
         score?.dimScores.steps_documented ?? null, score?.dimScores.spelling_grammar ?? null,
         score?.dimScores.professionalism ?? null,
         inc.rootCauseText,
-        ...extraColumns.map(c => inc.extraFields?.[c.name]),
+        ...extraColumns.map(c => {
+          const value = inc.extraFields?.[c.name];
+          if (c.kind === 'date') return asDate(value);
+          if (c.kind === 'number') return asNumber(value);
+          return value;
+        }),
       ].map(fit));
     }
   }
@@ -188,19 +230,25 @@ export function buildProblemsWorkbook(input: ProblemExportInput): ProblemExport 
   ];
   const metadataRows: Cell[][] = [['Campo', 'Valor'], ...metadata.map(([k, v]) => [k, fit(v)])];
 
+  // Dates are written as Excel serials and shown as DATE_FORMAT, so Excel can
+  // sort, filter and calculate with them; numbers keep their source format.
+  const problemSheet = XLSX.utils.aoa_to_sheet(problemRows);
+  for (const name of ['Primer visto', 'Último visto'] as const) {
+    formatColumn(problemSheet, problemRows.length, PROBLEM_COLUMNS.indexOf(name), DATE_FORMAT);
+  }
+
   const detailSheet = XLSX.utils.aoa_to_sheet(detailRows);
-  // Unmapped numeric columns keep their source number format (dates stay dates).
+  for (const name of ['Opened', 'Closed'] as const) {
+    formatColumn(detailSheet, detailRows.length, DETAIL_COLUMNS.indexOf(name), DATE_FORMAT);
+  }
   extraColumns.forEach((column, i) => {
-    if (!column.numFmt) return;
     const c = DETAIL_COLUMNS.length + i;
-    for (let r = 1; r < detailRows.length; r++) {
-      const cell = detailSheet[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined;
-      if (cell?.t === 'n') cell.z = column.numFmt;
-    }
+    if (column.kind === 'date') formatColumn(detailSheet, detailRows.length, c, DATE_FORMAT);
+    else if (column.kind === 'number' && column.numFmt) formatColumn(detailSheet, detailRows.length, c, column.numFmt);
   });
 
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(problemRows), SHEET_PROBLEMS);
+  XLSX.utils.book_append_sheet(workbook, problemSheet, SHEET_PROBLEMS);
   XLSX.utils.book_append_sheet(workbook, detailSheet, SHEET_DETAIL);
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(metadataRows), SHEET_METADATA);
 

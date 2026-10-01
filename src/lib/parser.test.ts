@@ -373,13 +373,13 @@ describe('readIncidentTable', () => {
     expect(rows).toHaveLength(1);
     expect(columns).toEqual([
       { name: 'Number', mapped: true },
-      { name: 'Service', mapped: false },
+      { name: 'Service', mapped: false, kind: 'text' },
       { name: 'State', mapped: true },
-      { name: 'Resolution code', mapped: false },
+      { name: 'Resolution code', mapped: false, kind: 'text' },
     ]);
   });
 
-  it("records an unmapped numeric column's number format so dates can be written back as dates", () => {
+  it('types unmapped columns: Excel dates as date, Excel numbers as number with their format', () => {
     const sheet = XLSX.utils.aoa_to_sheet([['Number', 'Resolved', 'Cost'], ['INC0001', 46085.5, 12.5]]);
     sheet.B2.z = 'yyyy-mm-dd hh:mm';
     const wb = XLSX.utils.book_new();
@@ -388,9 +388,25 @@ describe('readIncidentTable', () => {
     expect(rows[0].Resolved).toBe(46085.5);
     expect(columns).toEqual([
       { name: 'Number', mapped: true },
-      { name: 'Resolved', mapped: false, numFmt: 'yyyy-mm-dd hh:mm' },
-      { name: 'Cost', mapped: false },
+      { name: 'Resolved', mapped: false, kind: 'date' },
+      { name: 'Cost', mapped: false, kind: 'number' },
     ]);
+  });
+
+  it('types text columns strictly, never turning identifiers or codes into numbers', () => {
+    const csv = [
+      'Number,Resolve time,Job ID,App number,Code,Updated,Notes,Empty',
+      'INC1,9089,12345,700,007,2026-09-26 23:14:56,12,',
+      'INC2,-1.5,12346,701,008,2026-09-27,ok,',
+    ].join('\n');
+    const bytes = new TextEncoder().encode(csv);
+    const buffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(buffer).set(bytes);
+    const kinds = Object.fromEntries(readIncidentTable(buffer).columns.filter(c => !c.mapped).map(c => [c.name, c.kind]));
+    expect(kinds).toEqual({
+      'Resolve time': 'number', 'Job ID': 'text', 'App number': 'text', Code: 'text',
+      Updated: 'date', Notes: 'text', Empty: 'text',
+    });
   });
 
   it('returns no columns for an empty sheet', () => {

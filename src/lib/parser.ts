@@ -345,13 +345,24 @@ export function readWorkbook(buffer: ArrayBuffer): XLSX.WorkBook {
   return XLSX.read(decodeText(bytes), { type: 'string', ...READ_OPTIONS });
 }
 
+/**
+ * What an unmapped column holds, decided once over every row of the source:
+ * - `date`: every non-empty cell is an Excel date, or ISO text `YYYY-MM-DD[ HH:MM[:SS]]`.
+ * - `number`: every non-empty cell is an Excel number, or plain decimal text —
+ *   unless the text column's header names an identifier, whose digits are a code.
+ * - `text`: anything else, kept exactly as written.
+ */
+export type ColumnKind = 'date' | 'number' | 'text';
+
 /** One column of the source sheet, in its original position. */
 export interface SourceColumn {
   /** Header as the rows key it (SheetJS renames blanks and duplicates). */
   name: string;
   /** Read into the canonical model rather than kept in `extraFields`. */
   mapped: boolean;
-  /** Excel number format of the column's first formatted numeric cell, if any. */
+  /** For unmapped columns: how the export should type the column's cells. */
+  kind?: ColumnKind;
+  /** For unmapped number columns: the source's non-General number format, if any. */
   numFmt?: string;
 }
 
@@ -361,21 +372,62 @@ export interface IncidentTable {
   columns: SourceColumn[];
 }
 
-/** First non-General number format among the numeric cells of one column. */
-function columnNumberFormat(sheet: XLSX.WorkSheet, col: number, firstRow: number, lastRow: number): string | undefined {
+/** ISO date text as ServiceNow writes it, with optional minutes and seconds. */
+export const ISO_DATE_TEXT_RE = /^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$/;
+
+/** Plain decimal text that converts to a number without losing anything. */
+const PLAIN_NUMBER_TEXT_RE = /^-?(?:0|[1-9]\d{0,14})(?:\.\d+)?$/;
+
+/** Headers whose digits are codes, not quantities: ID, number, code, key, ref... */
+function isIdentifierHeader(header: string): boolean {
+  return /(^|[^a-z])(ids?|numbers?|no|nbr|num|codes?|keys?|refs?|sys_id)([^a-z]|$)|#/i.test(header)
+    || /[a-z](ID|Id)\b/.test(header);
+}
+
+/** Type an unmapped column from all of its data cells. */
+function classifyColumn(sheet: XLSX.WorkSheet, header: string, col: number, firstRow: number, lastRow: number): Pick<SourceColumn, 'kind' | 'numFmt'> {
   const dense = sheet as unknown as XLSX.CellObject[][];
+  let dates = 0;
+  let numbers = 0;
+  let numberText = 0;
+  let other = 0;
+  let numFmt: string | undefined;
+
   for (let r = firstRow; r <= lastRow; r++) {
     const cell = dense[r]?.[col];
-    if (cell?.t === 'n' && typeof cell.z === 'string' && cell.z !== 'General') return cell.z;
+    if (!cell || cell.v === undefined || cell.v === null || cell.v === '') continue;
+    if (cell.t === 'n') {
+      if (typeof cell.z === 'string' && XLSX.SSF.is_date(cell.z)) dates++;
+      else {
+        numbers++;
+        if (!numFmt && typeof cell.z === 'string' && cell.z !== 'General') numFmt = cell.z;
+      }
+    } else if (cell.t === 'd') {
+      dates++;
+    } else if (cell.t === 's' && typeof cell.v === 'string') {
+      const text = cell.v.trim();
+      if (!text) continue;
+      if (ISO_DATE_TEXT_RE.test(text)) dates++;
+      else if (PLAIN_NUMBER_TEXT_RE.test(text)) numberText++;
+      else other++;
+    } else {
+      other++;
+    }
   }
-  return undefined;
+
+  const filled = dates + numbers + numberText + other;
+  if (filled > 0 && dates === filled) return { kind: 'date' };
+  if (filled > 0 && numbers + numberText === filled && (numberText === 0 || !isIdentifierHeader(header))) {
+    return numFmt ? { kind: 'number', numFmt } : { kind: 'number' };
+  }
+  return { kind: 'text' };
 }
 
 /**
  * Read the first sheet into header-keyed rows plus its column layout.
  *
- * The layout keeps the source column order and, for unmapped numeric columns,
- * the number format, so an export can rebuild those columns as they were.
+ * The layout keeps the source column order and the type of each unmapped
+ * column, so an export can rebuild those columns as they were.
  */
 export function readIncidentTable(buffer: ArrayBuffer): IncidentTable {
   const wb = readWorkbook(buffer);
@@ -389,8 +441,8 @@ export function readIncidentTable(buffer: ArrayBuffer): IncidentTable {
   const range = XLSX.utils.decode_range(sheet['!ref']);
   const columns = Object.keys(rows[0]).map((name, i): SourceColumn => {
     const mapped = MAPPED_HEADERS.has(name);
-    const numFmt = mapped ? undefined : columnNumberFormat(sheet, range.s.c + i, range.s.r + 1, range.e.r);
-    return numFmt ? { name, mapped, numFmt } : { name, mapped };
+    if (mapped) return { name, mapped };
+    return { name, mapped, ...classifyColumn(sheet, name, range.s.c + i, range.s.r + 1, range.e.r) };
   });
   return { rows, columns };
 }

@@ -132,8 +132,16 @@ is built in the browser with SheetJS — nothing is uploaded.
 | Sheet | Contents |
 | --- | --- |
 | `Problemas` | One row per problem, using the same values the dashboard shows. `Patrón` is `chronic` when the app flags the problem as chronic (3+ ISO weeks and 3+ incidents) and blank otherwise. |
-| `Detalle` | One row per incident of those problems: problem id and title, every canonical field, category, week, resolution hours, score and dimensions, documented root cause, then every **unmapped source column** in its original order and with its original value. Unmapped numeric columns keep their Excel number format, so dates stay dates. |
+| `Detalle` | One row per incident of those problems: problem id and title, every canonical field, category, week, resolution hours, score and dimensions, documented root cause, then every **unmapped source column** in its original order and with its original value. |
 | `Metadatos` | Source file, export time, scope, filters and month range, problem and incident counts, scorer version (`src/lib/scorerVersion.ts`), truncated cells and unmapped columns. |
+
+Dates (Opened, Closed, first/last seen, and unmapped date columns) are written
+as real Excel dates shown `yyyy-mm-dd hh:mm:ss`, so Excel sorts, filters and
+calculates with them. Each unmapped column is typed once from all its rows: a
+column is a date when every value is an Excel date or ISO date text, and a
+number when every value is an Excel number or plain decimal text. Text digits
+under an identifier-like header (ID, number, code, key, ref) stay text, as do
+values with leading zeros and mixed columns.
 
 Cells longer than Excel's 32,767-character limit are truncated in the file only,
 with a `[TRUNCADO …]` marker, and counted in `Metadatos`. For files over 10,000
