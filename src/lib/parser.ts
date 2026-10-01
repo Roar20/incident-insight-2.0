@@ -166,15 +166,51 @@ export function enrichRow(row: IncidentRow): EnrichedIncident {
   };
 }
 
+const READ_OPTIONS = {
+  cellFormula: false,
+  cellHTML: false,
+  cellStyles: false,
+  dense: true,
+} as const;
+
+/**
+ * True when the bytes are a binary spreadsheet container, or text whose
+ * encoding SheetJS already detects from its byte-order mark.
+ */
+function isBinaryOrMarkedText(bytes: Uint8Array): boolean {
+  const [a, b, c, d] = bytes;
+  if (a === 0x50 && b === 0x4b && c === 0x03 && d === 0x04) return true; // zip: xlsx, xlsb, ods
+  if (a === 0xd0 && b === 0xcf && c === 0x11 && d === 0xe0) return true; // OLE2: legacy xls
+  if ((a === 0xff && b === 0xfe) || (a === 0xfe && b === 0xff)) return true; // UTF-16 BOM
+  return false;
+}
+
+/**
+ * Decode a text export. SheetJS reads BOM-less text as Latin-1, which turns
+ * UTF-8 accents into mojibake ("Contraseña" -> "ContraseÃ±a"), so decode it
+ * ourselves: UTF-8 when the bytes are valid UTF-8, else Windows-1252, which is
+ * what Excel writes for "CSV (comma delimited)".
+ */
+function decodeText(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
+}
+
+/** Parse an uploaded file into a workbook, decoding text exports explicitly. */
+export function readWorkbook(buffer: ArrayBuffer): XLSX.WorkBook {
+  const bytes = new Uint8Array(buffer);
+  if (isBinaryOrMarkedText(bytes)) {
+    return XLSX.read(buffer, { type: 'array', ...READ_OPTIONS });
+  }
+  return XLSX.read(decodeText(bytes), { type: 'string', ...READ_OPTIONS });
+}
+
 /** Read the first sheet of a workbook into plain header-keyed rows. */
 export function readIncidentRows(buffer: ArrayBuffer): IncidentRow[] {
-  const wb = XLSX.read(buffer, {
-    type: 'array',
-    cellFormula: false,
-    cellHTML: false,
-    cellStyles: false,
-    dense: true,
-  });
+  const wb = readWorkbook(buffer);
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return [];
   return XLSX.utils.sheet_to_json<IncidentRow>(wb.Sheets[sheetName], { defval: '' });

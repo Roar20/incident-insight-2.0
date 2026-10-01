@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import * as XLSX from 'xlsx';
 import { del } from '@vercel/blob';
-import { enrichRow, type EnrichedIncident, type IncidentRow } from '../src/lib/parser';
+import { enrichRow, readWorkbook, type EnrichedIncident, type IncidentRow } from '../src/lib/parser';
 import { scoreIncident, type IncidentScore } from '../src/lib/scorer';
 import {
   computeOverview, computeDimStats, computeFeedback,
@@ -42,13 +42,7 @@ function parseExcelFileChunked(
   chunkSize: number,
   onChunk: (incidents: EnrichedIncident[], scores: IncidentScore[]) => void,
 ) {
-  const wb = XLSX.read(buffer, {
-    type: 'buffer',
-    cellFormula: false,
-    cellHTML: false,
-    cellStyles: false,
-    dense: true,
-  });
+  const wb = readWorkbook(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer);
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return;
 

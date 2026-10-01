@@ -142,3 +142,45 @@ describe('readIncidentRows / parseExcelFile', () => {
     expect(parseExcelFile(workbookBuffer([]))).toEqual([]);
   });
 });
+
+/**
+ * Bytes as `File.arrayBuffer()` returns them in the browser.
+ *
+ * Copied into an ArrayBuffer of this realm on purpose: under jsdom a
+ * TextEncoder buffer fails `instanceof ArrayBuffer`, which sends SheetJS down a
+ * different code path than the browser takes and produces misleading results.
+ */
+function fileBuffer(bytes: ArrayLike<number>): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.length);
+  new Uint8Array(buffer).set(Array.from(bytes));
+  return buffer;
+}
+
+const utf8 = (text: string) => fileBuffer(new TextEncoder().encode(text));
+
+describe('CSV text encoding', () => {
+  const csv = 'Number,Short description,Work notes\r\n'
+    + 'INC0001,Contraseña bloqueada,"2025-03-04 09:00:00 - A. Tech (Work notes)\nSe identificó que la causa raíz era un certificado caducado."\r\n';
+
+  it('decodes a UTF-8 CSV without a byte-order mark', () => {
+    const [inc] = parseExcelFile(utf8(csv));
+
+    expect(inc['Short description']).toBe('Contraseña bloqueada');
+    expect(inc.humanNotes[0].text).toBe('Se identificó que la causa raíz era un certificado caducado.');
+  });
+
+  it('decodes a UTF-8 CSV with a byte-order mark', () => {
+    const [inc] = parseExcelFile(utf8('﻿' + csv));
+
+    expect(inc.Number).toBe('INC0001');
+    expect(inc['Short description']).toBe('Contraseña bloqueada');
+  });
+
+  it('still reads a legacy Windows-1252 CSV', () => {
+    // "Contraseña" with ñ as the single byte 0xF1, as Excel saves "CSV (comma delimited)".
+    const bytes = [...new TextEncoder().encode('Number,Short description\r\nINC0001,Contrase'), 0xf1, 0x61, 0x0d, 0x0a];
+    const [inc] = parseExcelFile(fileBuffer(bytes));
+
+    expect(inc['Short description']).toBe('Contraseña');
+  });
+});
