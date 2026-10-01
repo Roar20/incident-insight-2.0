@@ -233,3 +233,78 @@ describe('day/month text dates', () => {
     expect(incidents[0].Closed).toBe('2025-03-05 11:30:00');
   });
 });
+
+describe('work-note journal splitting', () => {
+  it('splits entries of every journal type, not only Work notes', () => {
+    const inc = enrichRow({
+      'Work notes': [
+        '2025-03-04 10:00:00 - B. Tech (Work notes)',
+        'Restarted the print spooler.',
+        '',
+        '2025-03-04 09:00:00 - A. Tech (Additional comments)',
+        'Called the user, waiting for confirmation.',
+        '',
+        '2025-03-04 08:00:00 - System (Work notes)',
+        'Task is created by system',
+      ].join('\n'),
+    });
+
+    expect(inc.allNotes.map(n => [n.author, n.text])).toEqual([
+      ['B. Tech', 'Restarted the print spooler.'],
+      ['A. Tech', 'Called the user, waiting for confirmation.'],
+      ['System', 'Task is created by system'],
+    ]);
+    expect(inc.humanNotes).toHaveLength(2);
+  });
+
+  it('never lets an author run across lines', () => {
+    const inc = enrichRow({
+      'Work notes': [
+        '2025-03-04 09:00:00 - A. Tech (Additional comments)',
+        'Called user',
+        '2025-03-04 10:00:00 - B. Tech (Work notes)',
+        'Restarted service',
+      ].join('\n'),
+    });
+
+    expect(inc.allNotes.every(n => !n.author.includes('\n'))).toBe(true);
+    expect(inc.allNotes.map(n => n.author)).toEqual(['A. Tech', 'B. Tech']);
+  });
+
+  it('splits entries whose timestamps are written day/month or with a 12-hour clock', () => {
+    const inc = enrichRow({
+      'Work notes': [
+        '13/03/2025 09:30:00 - A. Tech (Work notes)',
+        'Replaced the patch cable.',
+        '',
+        '03/13/2025 01:05:00 PM - System (Work notes)',
+        'Task is created by system',
+      ].join('\n'),
+    });
+
+    expect(inc.allNotes.map(n => [n.timestamp, n.author])).toEqual([
+      ['13/03/2025 09:30:00', 'A. Tech'],
+      ['03/13/2025 01:05:00 PM', 'System'],
+    ]);
+    expect(inc.humanNotes.map(n => n.text)).toEqual(['Replaced the patch cable.']);
+  });
+
+  it('keeps parentheses that belong to the author name', () => {
+    const inc = enrichRow({
+      'Work notes': '2025-03-04 09:00:00 - Jane Roe (Contractor) (Work notes)\nChecked the DNS records.',
+    });
+
+    expect(inc.allNotes).toEqual([
+      { timestamp: '2025-03-04 09:00:00', author: 'Jane Roe (Contractor)', text: 'Checked the DNS records.', isSystem: false },
+    ]);
+  });
+
+  it('does not split on a timestamp quoted inside a note body', () => {
+    const inc = enrichRow({
+      'Work notes': '2025-03-04 09:00:00 - A. Tech (Work notes)\nLogs show the crash at 2025-03-04 08:55:00 - see (attached).',
+    });
+
+    expect(inc.allNotes).toHaveLength(1);
+    expect(inc.allNotes[0].text).toBe('Logs show the crash at 2025-03-04 08:55:00 - see (attached).');
+  });
+});

@@ -32,7 +32,16 @@ export interface EnrichedIncident extends RawIncident {
   isAutoDesc: boolean;
 }
 
-const NOTE_RE = /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*-\s*(.+?)\s*\(Work notes\)\n(.*?)(?=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s*-|$)/gs;
+/**
+ * One journal entry header on a line of its own:
+ * "<timestamp> - <author> (<journal>)", e.g. "2025-03-04 09:12:00 - A. Tech (Work notes)".
+ *
+ * Any journal label is accepted (Work notes, Additional comments, a localised
+ * label), the timestamp may be ISO or day/month with an optional 12-hour clock,
+ * and the author cannot span lines. Group 1 is the line break preceding the
+ * header, so the header itself starts after it.
+ */
+const NOTE_HEADER_RE = /(^|\n|_x000D_)[ \t]*((?:\d{4}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{4})[ T]+\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]*[AaPp][Mm])?)[ \t]*-[ \t]*([^\n]+?)[ \t]*\([^()\n]+\)[ \t]*(?=_x000D_|\r?\n|$)/g;
 
 const SYSTEM_PHRASES = [
   "sent communication to", "could not contact", "task is created by system",
@@ -72,15 +81,19 @@ function isAutoDescription(text: string): boolean {
 
 function parseNotes(raw: string): NoteEntry[] {
   if (!raw || typeof raw !== 'string') return [];
-  const entries: NoteEntry[] = [];
-  let match;
-  NOTE_RE.lastIndex = 0;
-  while ((match = NOTE_RE.exec(raw)) !== null) {
-    const [, ts, author, body] = match;
-    const text = cleanText(body);
-    const isSystem = author.trim().toLowerCase() === 'system' || isSystemText(text);
-    entries.push({ timestamp: ts.trim(), author: author.trim(), text, isSystem });
-  }
+  const headers = [...raw.matchAll(NOTE_HEADER_RE)].map(m => ({
+    start: m.index! + m[1].length,
+    end: m.index! + m[0].length,
+    timestamp: m[2].trim(),
+    author: m[3].trim(),
+  }));
+
+  // Each entry's body runs from the end of its header to the next header.
+  const entries: NoteEntry[] = headers.map((h, i) => {
+    const text = cleanText(raw.slice(h.end, headers[i + 1]?.start ?? raw.length));
+    const isSystem = h.author.toLowerCase() === 'system' || isSystemText(text);
+    return { timestamp: h.timestamp, author: h.author, text, isSystem };
+  });
   if (entries.length === 0 && raw.trim()) {
     entries.push({ timestamp: "", author: "Unknown", text: cleanText(raw), isSystem: false });
   }
