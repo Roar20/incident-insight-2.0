@@ -57,7 +57,7 @@ export interface ProblemCluster {
   /** Percentage of the cluster's incidents with a documented root cause. */
   rcaCoverage: number;
   medianResolutionHours: number | null;
-  /** Percentage of resolved incidents that missed SLA, or null if unknown. */
+  /** Percentage of resolved incidents that missed SLA, or null if none records Made SLA. */
   slaBreachPct: number | null;
   avgScore: number;
   topGroups: NamedCount[];
@@ -299,9 +299,9 @@ export function computeProblemClusters(
 
       if (inc.resolutionHours !== null) durations.push(inc.resolutionHours);
 
-      if (inc.isClosed) {
+      if (inc.isClosed && inc['Made SLA'] !== null) {
         slaTracked++;
-        if (!inc['Made SLA']) slaBreached++;
+        if (inc['Made SLA'] === false) slaBreached++;
       }
 
       const score = scoreMap.get(inc.Number);
@@ -362,7 +362,8 @@ export function computeCategoryStats(
     .map(([name, members]) => {
       const durations = members.filter(m => m.resolutionHours !== null).map(m => m.resolutionHours!);
       const closed = members.filter(m => m.isClosed);
-      const breached = closed.filter(m => !m['Made SLA']).length;
+      const slaTracked = closed.filter(m => m['Made SLA'] !== null);
+      const breached = slaTracked.filter(m => m['Made SLA'] === false).length;
       const scored = members.map(m => scoreMap.get(m.Number)).filter(Boolean) as IncidentScore[];
 
       return {
@@ -372,7 +373,7 @@ export function computeCategoryStats(
         distinctProblems: new Set(members.map(m => m.clusterId)).size,
         rcaCoverage: pct(members.filter(m => m.rootCauseText).length, members.length),
         medianResolutionHours: median(durations),
-        slaBreachPct: closed.length > 0 ? pct(breached, closed.length) : null,
+        slaBreachPct: slaTracked.length > 0 ? pct(breached, slaTracked.length) : null,
         avgScore: scored.length ? round1(scored.reduce((a, s) => a + s.totalScore, 0) / scored.length) : 0,
       };
     })

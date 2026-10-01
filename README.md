@@ -121,6 +121,34 @@ one the team keeps re-fixing without ever learning why.
 The volume bar scales with the dataset (1% of incidents, minimum 3), so a small
 export still produces recommendations and a large one is not swamped by them.
 
+## Exporting problems
+
+**Exportar** on the Problems & RCA view downloads every problem the table is
+showing; the same button in a problem's detail modal downloads just that
+problem. Both export exactly the on-screen universe: the global month filter
+plus the view's search, category and "Undocumented only" filters. The workbook
+is built in the browser with SheetJS — nothing is uploaded.
+
+| Sheet | Contents |
+| --- | --- |
+| `Problemas` | One row per problem, using the same values the dashboard shows. `Patrón` is `chronic` when the app flags the problem as chronic (3+ ISO weeks and 3+ incidents) and blank otherwise. |
+| `Detalle` | One row per incident of those problems: problem id and title, every canonical field, category, week, resolution hours, score and dimensions, documented root cause, then every **unmapped source column** in its original order and with its original value. |
+| `Metadatos` | Source file, export time, scope, filters and month range, problem and incident counts, scorer version (`src/lib/scorerVersion.ts`), truncated cells and unmapped columns. |
+
+Dates (Opened, Closed, first/last seen, and unmapped date columns) are written
+as real Excel dates shown `yyyy-mm-dd hh:mm:ss`, so Excel sorts, filters and
+calculates with them. Each unmapped column is typed once from all its rows: a
+column is a date when every value is an Excel date or ISO date text, and a
+number when every value is an Excel number or plain decimal text. Text digits
+under an identifier-like header (ID, number, code, key, ref) stay text, as do
+values with leading zeros and mixed columns.
+
+Cells longer than Excel's 32,767-character limit are truncated in the file only,
+with a `[TRUNCADO …]` marker, and counted in `Metadatos`. For files over 10,000
+rows the worker discards raw Description and Work notes to save memory; the
+export then writes an explicit "No disponible" marker in those cells and says so
+in `Metadatos`, rather than leaving them blank.
+
 ## Architecture
 
 ```
@@ -134,6 +162,8 @@ src/lib/periods.ts      ISO weeks, resolution times, duration formatting
 src/lib/trends.ts       Weekly and monthly period aggregation
 src/lib/weekly.ts       The weekly digest: baselines, movements, new vs recurring
 src/lib/analytics.ts    Overview, dimensions, agent and group aggregation
+src/lib/problemView.ts  Month and Problems-view filters shared by the UI and the export
+src/lib/exportProblems.ts  XLSX export of problems (loaded on demand)
 src/workers/            Web Worker that runs the above off the main thread
 src/context/AppContext  Loaded dataset, month filtering, derived stats
 src/pages/              Dashboard views

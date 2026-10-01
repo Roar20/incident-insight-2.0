@@ -92,6 +92,15 @@ describe('computePeriodTrends', () => {
     expect(week.openCount).toBe(1);
   });
 
+  it('reports SLA breach as unknown when the export has no Made SLA values', () => {
+    const { incidents, scores } = withScores(annotateIncidents([
+      incident({ Opened: `${MONDAYS[0]} 09:00:00`, 'Made SLA': null }),
+      incident({ Opened: `${MONDAYS[0]} 09:00:00`, 'Made SLA': null }),
+    ]));
+
+    expect(computePeriodTrends(incidents, scores, 'week')[0].slaBreachPct).toBeNull();
+  });
+
   it('reports root cause coverage per period', () => {
     const { incidents, scores } = withScores(annotateIncidents([
       incident({ Opened: `${MONDAYS[0]} 09:00:00`, humanNotes: [note('Root cause was a disk full condition.')] }),
