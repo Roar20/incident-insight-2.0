@@ -12,10 +12,10 @@ function xlsxBuffer(rows: Record<string, unknown>[]): ArrayBuffer {
 
 describe('schema configuration', () => {
   it('configures only the verified dimension headers', () => {
-    expect(SCHEMA_CONFIG_VERSION).toBe('1.0.0');
+    expect(SCHEMA_CONFIG_VERSION).toBe('1.1.0');
     expect(OPTIONAL_DIMENSION_ALIASES).toEqual({
-      service: ['Service'],
-      serviceOffering: ['Service offering'],
+      service: ['Service', 'business_service'],
+      serviceOffering: ['Service offering', 'service_offering'],
       resolutionCode: ['Resolution code'],
     });
   });
@@ -43,9 +43,21 @@ describe('getDimension', () => {
   });
 
   it('does not read unconfigured spellings', () => {
-    const inc = enrichRow({ Number: 'INC1', service: 'Service-01', business_service: 'Service-02', close_code: 'Code-1' });
+    const inc = enrichRow({ Number: 'INC1', service: 'Service-01', 'Service Offering': 'Offering-1', close_code: 'Code-1', u_close_code: 'Code-2' });
     expect(getDimension(inc, 'service')).toBeNull();
+    expect(getDimension(inc, 'serviceOffering')).toBeNull();
     expect(getDimension(inc, 'resolutionCode')).toBeNull();
+  });
+
+  it('reads the ServiceNow field names business_service and service_offering', () => {
+    const inc = enrichRow({ number: 'INC1', business_service: 'Service-02', service_offering: 'Offering-2' });
+    expect(getDimension(inc, 'service')).toBe('Service-02');
+    expect(getDimension(inc, 'serviceOffering')).toBe('Offering-2');
+  });
+
+  it('prefers the display label when a file has both spellings', () => {
+    const inc = enrichRow({ Number: 'INC1', Service: 'Service-01', business_service: 'Service-02' });
+    expect(getDimension(inc, 'service')).toBe('Service-01');
   });
 
   it('keeps a non-text value as written', () => {

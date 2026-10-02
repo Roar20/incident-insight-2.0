@@ -5,7 +5,7 @@
  * here — this file only owns the chunking, progress reporting and the memory
  * trimming that keeps very large exports transferable back to the main thread.
  */
-import { enrichRow, inferDateOrder, readIncidentTable, type EnrichedIncident, type SourceColumn } from '../lib/parser';
+import { checkIncidentTable, enrichRow, inferDateOrder, readIncidentTable, type EnrichedIncident, type SourceColumn } from '../lib/parser';
 import { scoreIncident, type IncidentScore } from '../lib/scorer';
 import {
   computeOverview, computeDimStats, computeFeedback,
@@ -32,6 +32,8 @@ export interface WorkerResult {
   sourceColumns: SourceColumn[];
   /** True when raw Description and Work notes were dropped to save memory. */
   rawTextTrimmed: boolean;
+  /** Signs of damaged file structure that did not stop the load. */
+  warnings: string[];
 }
 
 export type WorkerMessage =
@@ -63,7 +65,13 @@ self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
   try {
     post({ type: 'progress', percent: 5, processed: 0, total: 0 });
 
-    const { rows, columns: sourceColumns } = readIncidentTable(buffer);
+    const table = readIncidentTable(buffer);
+    const { errors, warnings } = checkIncidentTable(buffer, table);
+    if (errors.length) {
+      post({ type: 'error', payload: errors.join(' ') });
+      return;
+    }
+    const { rows, columns: sourceColumns } = table;
     const totalRows = rows.length;
 
     post({ type: 'progress', percent: 15, processed: 0, total: totalRows });
@@ -120,6 +128,7 @@ self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
       fileName: name,
       sourceColumns,
       rawTextTrimmed: trimRawFields,
+      warnings,
     };
 
     post({ type: 'progress', percent: 97, processed: totalRows, total: totalRows });

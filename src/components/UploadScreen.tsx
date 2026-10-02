@@ -5,6 +5,8 @@ import { useAppContext } from '@/context/AppContext';
 
 export default function UploadScreen() {
   const { loadFile, loading, loadingProgress, loadingMessage } = useAppContext();
+  // A load that ended in an error leaves its message here; a new load replaces it.
+  const loadError = !loading && /^(Error|Worker error):/.test(loadingMessage) ? loadingMessage : '';
 
   const handleFile = useCallback((file: File) => {
     //if (file.size > 157286400) {
@@ -83,6 +85,12 @@ export default function UploadScreen() {
               </p>
             </label>
           </div>
+        )}
+
+        {loadError && (
+          <p role="alert" className="mt-4 rounded-md border border-destructive/60 bg-destructive/10 px-3 py-2 text-left text-sm text-foreground">
+            {loadError}
+          </p>
         )}
 
         <motion.div

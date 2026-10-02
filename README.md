@@ -52,7 +52,36 @@ equivalents, so both export styles work:
 | Made SLA | `made_sla` |
 
 Missing columns degrade gracefully — they score as empty rather than failing
-the import.
+the import. Two are required: the incident number, and a short description or
+description to identify problems by. A file without them, or without any rows,
+is not loaded.
+
+The optional Service and Service offering columns are read as `Service` /
+`business_service` and `Service offering` / `service_offering`
+(`src/config/schema.ts`, schema config 1.1.0).
+
+### CSV and XLSX
+
+CSV and XLSX go through the same path: the format is decided from the file's
+bytes (never the name or MIME type), both become the same header-keyed rows,
+and everything after that — scoring, problems, filters, export — is shared.
+
+- **Encoding:** a byte-order mark is honoured; otherwise UTF-8 when the bytes
+  are valid UTF-8, else Windows-1252, decoded with the browser's WHATWG table
+  in every runtime so the serverless API reads the same text as the browser.
+- **Line breaks:** CRLF, a bare CR and LF split work-note entries and clean to
+  the same text. Raw cells are kept as written for the export.
+- **Damaged structure:** unbalanced quotes or values under an unnamed column
+  are reported as warnings; they never stop a load.
+- **Privacy:** dedicated email columns (`email`, `*.email`, e.g.
+  `assigned_to.email`) are dropped when the file is read. `opened_by`,
+  `closed_by` and `sys_updated_by` stay with each incident but are never
+  exported. `Assigned to` is unchanged.
+
+Known debt: free-text fields (descriptions, notes, comments) may contain email
+addresses or names, and are neither redacted nor masked. `comments`,
+`close_code` and `u_close_code` stay unmapped: which column carries the
+resolution code is undecided.
 
 ## How scoring works
 

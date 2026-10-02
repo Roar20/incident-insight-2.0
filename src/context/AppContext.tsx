@@ -10,6 +10,7 @@ import { computeProblemClusters, computeCategoryStats, recommendActions } from '
 import { computePeriodTrends, type PeriodTrend } from '@/lib/trends';
 import { availableWeeks } from '@/lib/weekly';
 import type { SourceColumn } from '@/lib/parser';
+import { toast } from 'sonner';
 import { ALL_VALUES, filterIncidents, isAnyFilterActive, isDimensionFiltered, type DimensionSelection, type GlobalFilters } from '@/lib/problemView';
 import { dimensionAvailability as availabilityOf, type DimensionAvailability } from '@/lib/dimensions';
 import { clusterSizes } from '@/lib/serviceDimension';
@@ -80,6 +81,9 @@ interface AppContextType extends AppState {
   monthlyTrends: PeriodTrend[];
 }
 
+/** One toast for ingestion warnings, replaced or cleared by the next load. */
+const INGESTION_WARNING_TOAST = 'ingestion-warnings';
+
 const AppContext = createContext<AppContextType | null>(null);
 
 export function useAppContext() {
@@ -127,6 +131,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const loadFile = useCallback(async (file: File, name: string) => {
     stopWorker();
+    // Warnings belong to the file they were raised for.
+    toast.dismiss(INGESTION_WARNING_TOAST);
     setState(prev => ({
       ...prev,
       loading: true,
@@ -186,6 +192,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             availableWeeks: weeks, selectedWeek: weeks[weeks.length - 1] ?? '',
             loadingProgress: 100, loadingMessage: '',
           }));
+          if (msg.payload.warnings.length) {
+            toast.warning('File loaded with warnings', {
+              id: INGESTION_WARNING_TOAST,
+              description: msg.payload.warnings.join(' '),
+              duration: 15000,
+            });
+          }
           stopWorker();
         }
 

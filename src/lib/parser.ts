@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { AUTO_DESCRIPTION_KEYWORDS, SYSTEM_NOTE_AUTHORS, SYSTEM_NOTE_PHRASES } from '../config/patterns';
+import { isDedicatedEmailHeader } from '../config/schema';
 
 export interface RawIncident {
   Number: string;
@@ -60,6 +61,8 @@ function cleanText(text: string): string {
   if (!text) return "";
   let t = text;
   t = t.replace(/_x000D_/g, "\n");
+  // One line break whatever the source wrote: CRLF (CSV, Windows) or a bare CR.
+  t = t.replace(/\r\n?/g, "\n");
   t = t.replace(/\[\/?(code)\]/g, "");
   t = t.replace(/<[^>]+>/g, "");
   t = t.replace(/https?:\/\/\S+/g, "[URL]");
@@ -79,8 +82,11 @@ function isAutoDescription(text: string): boolean {
   return AUTO_DESC_KW.some(k => t.includes(k));
 }
 
-function parseNotes(raw: string): NoteEntry[] {
-  if (!raw || typeof raw !== 'string') return [];
+function parseNotes(source: string): NoteEntry[] {
+  if (!source || typeof source !== 'string') return [];
+  // Entry headers are found at line starts, so a CRLF or bare-CR line break must
+  // split entries exactly as LF does.
+  const raw = source.replace(/\r\n?/g, '\n');
   const headers = [...raw.matchAll(NOTE_HEADER_RE)].map(m => ({
     start: m.index! + m[1].length,
     end: m.index! + m[0].length,
@@ -135,7 +141,7 @@ export function isMappedColumn(header: string): boolean {
 function unmappedFields(row: IncidentRow): Record<string, unknown> | undefined {
   let extra: Record<string, unknown> | undefined;
   for (const key of Object.keys(row)) {
-    if (MAPPED_HEADERS.has(key)) continue;
+    if (MAPPED_HEADERS.has(key) || isDedicatedEmailHeader(key)) continue;
     (extra ??= {})[key] = row[key];
   }
   return extra;
@@ -326,8 +332,39 @@ function decodeText(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    return new TextDecoder('windows-1252').decode(bytes);
+    return decodeWindows1252(bytes);
   }
+}
+
+/**
+ * The WHATWG `windows-1252` mapping of bytes 0x80–0x9F, as browsers decode it.
+ * The five bytes Windows leaves undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D) map to
+ * the C1 control of the same value. Every other byte maps to the code point of
+ * the same value.
+ */
+const WINDOWS_1252_HIGH = [
+  0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+  0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+];
+
+/**
+ * Decode Windows-1252 text exactly as a browser's `TextDecoder('windows-1252')`.
+ * Node's decoder treats that label as Latin-1 and turns 0x80–0x9F (dashes,
+ * curly quotes, the euro sign) into control characters, so the serverless API
+ * and the browser read the same file differently. A fixed table keeps them equal.
+ */
+export function decodeWindows1252(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    const chunk = bytes.subarray(i, i + 8192);
+    const codes = new Array<number>(chunk.length);
+    for (let k = 0; k < chunk.length; k++) {
+      const b = chunk[k];
+      codes[k] = b >= 0x80 && b <= 0x9f ? WINDOWS_1252_HIGH[b - 0x80] : b;
+    }
+    out += String.fromCharCode(...codes);
+  }
+  return out;
 }
 
 /** Parse an uploaded file into a workbook, decoding text exports explicitly. */
@@ -433,12 +470,66 @@ export function readIncidentTable(buffer: ArrayBuffer): IncidentTable {
 
   // With `defval` every row carries every header, in sheet column order.
   const range = XLSX.utils.decode_range(sheet['!ref']);
-  const columns = Object.keys(rows[0]).map((name, i): SourceColumn => {
-    const mapped = MAPPED_HEADERS.has(name);
-    if (mapped) return { name, mapped };
-    return { name, mapped, ...classifyColumn(sheet, name, range.s.c + i, range.s.r + 1, range.e.r) };
-  });
+  const headers = Object.keys(rows[0]);
+  const columns = headers
+    .map((name, i): SourceColumn | null => {
+      if (isDedicatedEmailHeader(name)) return null;
+      const mapped = MAPPED_HEADERS.has(name);
+      if (mapped) return { name, mapped };
+      return { name, mapped, ...classifyColumn(sheet, name, range.s.c + i, range.s.r + 1, range.e.r) };
+    })
+    .filter((c): c is SourceColumn => c !== null);
+
+  // Dedicated email columns stop here: no row, incident, UI or export carries them.
+  const emailHeaders = headers.filter(isDedicatedEmailHeader);
+  if (emailHeaders.length) for (const row of rows) for (const h of emailHeaders) delete row[h];
   return { rows, columns };
+}
+
+/** What stops a file from loading, and what only deserves a warning. */
+export interface TableCheck {
+  /** The file cannot be analysed; nothing is loaded. */
+  errors: string[];
+  /** The file loads, but its structure may be damaged. */
+  warnings: string[];
+}
+
+/**
+ * Check a parsed file before analysis.
+ *
+ * Blocks only what is certain: no incident rows, or no column for the incident
+ * number or for any text to identify problems by (short description or
+ * description), under any of their accepted headers. Signs of damaged CSV
+ * structure — unbalanced quotes, values under columns with no header — are only
+ * warnings: a valid file must never be rejected on a guess.
+ */
+export function checkIncidentTable(buffer: ArrayBuffer, table: IncidentTable): TableCheck {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (buffer.byteLength === 0) return { errors: ['The file is empty.'], warnings };
+  if (table.rows.length === 0) return { errors: ['The file has no incident rows.'], warnings };
+
+  const names = new Set(table.columns.map(c => c.name));
+  const has = (field: keyof typeof SOURCE_COLUMNS) => SOURCE_COLUMNS[field].some(h => names.has(h));
+  const missing: string[] = [];
+  if (!has('Number')) missing.push(`incident number (${SOURCE_COLUMNS.Number.join(' or ')})`);
+  if (!has('Short description') && !has('Description')) {
+    missing.push(`short description or description (${[...SOURCE_COLUMNS['Short description'], ...SOURCE_COLUMNS.Description].join(', ')})`);
+  }
+  if (missing.length) errors.push(`Required column${missing.length > 1 ? 's' : ''} missing: ${missing.join('; ')}.`);
+
+  const headerless = table.columns.filter(c => /^__EMPTY(_\d+)?$/.test(c.name));
+  if (headerless.length) {
+    const filled = table.rows.filter(r => headerless.some(c => String(r[c.name] ?? '').trim() !== '')).length;
+    if (filled) warnings.push(`${filled} row${filled === 1 ? ' has' : 's have'} values under a column with no header; the file's columns may be misaligned.`);
+  }
+  const bytes = new Uint8Array(buffer);
+  if (!isBinaryOrMarkedText(bytes)) {
+    let quotes = 0;
+    for (const b of bytes) if (b === 0x22) quotes++;
+    if (quotes % 2 === 1) warnings.push('The file has an odd number of double quotes; a quoted value may be unterminated and rows may be merged.');
+  }
+  return { errors, warnings };
 }
 
 /** Read the first sheet of a workbook into plain header-keyed rows. */

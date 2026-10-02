@@ -13,6 +13,7 @@ import type { ProblemListFilters } from './problemView';
 import type { AnnotatedIncident, NamedCount, ProblemCluster } from './problems';
 import type { IncidentScore } from './scorer';
 import { SCORER_VERSION } from './scorerVersion';
+import { isExportExcludedExtraColumn } from '../config/schema';
 
 export const SHEET_PROBLEMS = 'Problemas';
 export const SHEET_DETAIL = 'Detalle';
@@ -166,7 +167,8 @@ export function buildProblemsWorkbook(input: ProblemExportInput): ProblemExport 
   }
 
   // --- Detalle -----------------------------------------------------------
-  const extraColumns = input.sourceColumns.filter(c => !c.mapped);
+  // Unmapped columns are reproduced as written, except person columns kept for analysis only.
+  const extraColumns = input.sourceColumns.filter(c => !c.mapped && !isExportExcludedExtraColumn(c.name));
   const generated = new Set<string>(DETAIL_COLUMNS);
   const extraHeaders = extraColumns.map(c => (generated.has(c.name) ? `${c.name} (origen)` : c.name));
 
