@@ -11,6 +11,8 @@ interface Props {
   /** Export this problem and its incidents; the button is hidden without it. */
   onExport?: () => void;
   exporting?: boolean;
+  /** When set, export is disabled and this explains why. */
+  exportDisabledReason?: string;
 }
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
@@ -22,7 +24,7 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-export default function ProblemModal({ cluster, onClose, onExport, exporting = false }: Props) {
+export default function ProblemModal({ cluster, onClose, onExport, exporting = false, exportDisabledReason }: Props) {
   const undocumented = cluster.count - cluster.documentedCount;
 
   return (
@@ -51,7 +53,12 @@ export default function ProblemModal({ cluster, onClose, onExport, exporting = f
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {onExport && (
-                <ExportButton onClick={onExport} busy={exporting} title="Export this problem and all its incidents to XLSX" />
+                <ExportButton
+                  onClick={onExport}
+                  busy={exporting}
+                  disabled={exportDisabledReason !== undefined}
+                  title={exportDisabledReason ?? 'Export this problem and all its incidents to XLSX'}
+                />
               )}
               <button onClick={onClose} className="text-card-foreground/50 hover:text-card-foreground p-1 transition-colors">
                 <X className="w-5 h-5" />

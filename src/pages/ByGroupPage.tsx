@@ -1,16 +1,16 @@
 import { useAppContext } from '@/context/AppContext';
 import { SectionTitle, ScoreBadge, EmptyState, getNoiseColor } from '@/components/ui/dashboard-primitives';
-import MonthFilter from '@/components/MonthFilter';
+import GlobalFilters from '@/components/GlobalFilters';
 
 export default function ByGroupPage() {
   const { filteredGroupStats: groupStats } = useAppContext();
 
   return (
     <div className="animate-fade-in">
-      <MonthFilter />
+      <GlobalFilters />
       <SectionTitle>Performance by Assignment Group</SectionTitle>
       {groupStats.length === 0 ? (
-        <EmptyState message="No assignment groups match the selected months." />
+        <EmptyState message="No assignment groups match the current filters." />
       ) : (
       <div className="v1-card overflow-hidden">
         <div className="overflow-x-auto">

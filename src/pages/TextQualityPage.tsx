@@ -5,7 +5,7 @@ import {
   computeAvgNoteLengthByLabel,
 } from '@/lib/analytics';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import MonthFilter from '@/components/MonthFilter';
+import GlobalFilters from '@/components/GlobalFilters';
 
 const NOISE_COLORS = ['hsl(145,70%,38%)', 'hsl(43,90%,48%)', 'hsl(14,90%,55%)', 'hsl(0,80%,55%)'];
 const tooltipStyle = { background: 'hsl(210,20%,20%)', border: '1px solid hsl(210,15%,30%)', borderRadius: '8px', fontSize: '12px', color: 'hsl(0,0%,95%)', padding: '8px 12px' };
@@ -18,8 +18,8 @@ export default function TextQualityPage() {
   if (overview.total === 0) {
     return (
       <div className="animate-fade-in">
-        <MonthFilter />
-        <EmptyState message="No incidents match the selected months." />
+        <GlobalFilters />
+        <EmptyState message="No incidents match the current filters." />
       </div>
     );
   }
@@ -39,7 +39,7 @@ export default function TextQualityPage() {
 
   return (
     <div className="animate-fade-in">
-      <MonthFilter />
+      <GlobalFilters />
       <SectionTitle>Work Note Length Analysis</SectionTitle>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-6">
         <KPICard label="Avg Characters" value={overview.avgNoteLength} />

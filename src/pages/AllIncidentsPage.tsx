@@ -5,7 +5,7 @@ import IncidentModal from '@/components/IncidentModal';
 import type { IncidentScore } from '@/lib/scorer';
 import type { EnrichedIncident } from '@/lib/parser';
 import { Search } from 'lucide-react';
-import MonthFilter from '@/components/MonthFilter';
+import GlobalFilters from '@/components/GlobalFilters';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 type SortKey = 'score_desc' | 'score_asc' | 'noise_desc' | 'number';
@@ -74,7 +74,7 @@ export default function AllIncidentsPage() {
 
   return (
     <div className="animate-fade-in">
-      <MonthFilter />
+      <GlobalFilters />
       <SectionTitle>All Incidents</SectionTitle>
 
       <div className="flex flex-wrap gap-2.5 mb-5">
