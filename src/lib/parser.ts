@@ -108,7 +108,7 @@ export type IncidentRow = Record<string, unknown>;
  * first, then the field name. Every header listed here is mapped; any other
  * column is kept verbatim in `extraFields`.
  */
-const SOURCE_COLUMNS = {
+export const SOURCE_COLUMNS = {
   Number: ['Number', 'number'],
   'Task type': ['Task type', 'sys_class_name'],
   Priority: ['Priority', 'priority'],
