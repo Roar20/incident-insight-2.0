@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { filterByMonths, filterIncidents, filterVisibleProblems } from './problemView';
+import { ALL_VALUES, filterByMonths, filterIncidents, filterVisibleProblems, toggleSelectionMissing, toggleSelectionValue } from './problemView';
 import type { ProblemCluster } from './problems';
 
 const problem = (id: string, title: string, category: string, rcaCoverage: number) =>
@@ -88,5 +88,25 @@ describe('filterIncidents', () => {
     const before = structuredClone(incidents);
     filterIncidents(incidents, { months: ['2026-01'], services: { values: ['Service-A'], includeMissing: true }, serviceOfferings: none });
     expect(incidents).toEqual(before);
+  });
+});
+
+describe('toggleSelectionValue / toggleSelectionMissing', () => {
+  it('adds an absent value and removes a present one, keeping the rest of the selection', () => {
+    expect(toggleSelectionValue(ALL_VALUES, 'Service-A')).toEqual({ values: ['Service-A'], includeMissing: false });
+    expect(toggleSelectionValue({ values: ['Service-A', 'Service-B'], includeMissing: true }, 'Service-A')).toEqual({ values: ['Service-B'], includeMissing: true });
+    expect(toggleSelectionValue({ values: ['Service-A'], includeMissing: false }, 'Service-B')).toEqual({ values: ['Service-A', 'Service-B'], includeMissing: false });
+  });
+
+  it('toggles the missing-value option without touching the values', () => {
+    expect(toggleSelectionMissing({ values: ['Service-A'], includeMissing: false })).toEqual({ values: ['Service-A'], includeMissing: true });
+    expect(toggleSelectionMissing({ values: [], includeMissing: true })).toEqual(ALL_VALUES);
+  });
+
+  it('never mutates the input selection', () => {
+    const selection = { values: ['Service-A'], includeMissing: false };
+    toggleSelectionValue(selection, 'Service-B');
+    toggleSelectionMissing(selection);
+    expect(selection).toEqual({ values: ['Service-A'], includeMissing: false });
   });
 });

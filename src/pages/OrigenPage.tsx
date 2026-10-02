@@ -8,6 +8,7 @@ import DimensionTableView from '@/components/origen/DimensionTableView';
 import ServiceAgMatrix from '@/components/origen/ServiceAgMatrix';
 import ServiceOfferingTable from '@/components/origen/ServiceOfferingTable';
 import OrigenMonthly from '@/components/origen/OrigenMonthly';
+import ServiceRankingChart from '@/components/origen/ServiceRankingChart';
 import { NotAvailable, Section } from '@/components/origen/shared';
 import { crossTab, dimensionTable, monthlySeries, pairTable } from '@/lib/serviceDimension';
 
@@ -20,7 +21,7 @@ const pct = (value: number | null) => (value === null ? '—' : `${(value * 100)
 
 /** Origen — Explore all: Service and Service offering context of the visible incidents. */
 export default function OrigenPage() {
-  const { filteredIncidents, filteredProblems, dimensionAvailability, selectedMonths, availableMonths } = useAppContext();
+  const { filteredIncidents, filteredProblems, dimensionAvailability, selectedMonths, availableMonths, serviceSelection, setServiceSelection } = useAppContext();
   const [monthlyBy, setMonthlyBy] = useState<'service' | 'serviceOffering'>('service');
   const { service: hasService, serviceOffering: hasOffering } = dimensionAvailability;
 
@@ -78,6 +79,15 @@ export default function OrigenPage() {
             <KPICard label="Offering coverage" value={hasOffering ? pct(offerings.coverage) : '—'} sub={hasOffering ? `${offerings.visible - offerings.withValue} with no Offering` : 'not in this file'} />
             <KPICard label="Assignment groups" value={assignmentGroups} sub="handling these incidents" />
           </div>
+
+          <Section title="Where is the noise?" hint="Visible incident volume associated with each Service">
+            <ServiceRankingChart
+              table={services}
+              available={hasService}
+              selection={serviceSelection}
+              onSelectionChange={setServiceSelection}
+            />
+          </Section>
 
           <Section title="By Service" hint="Expand a Service to see the Offerings observed with it.">
             {hasService ? (

@@ -65,6 +65,21 @@ export function isAnyFilterActive(filters: GlobalFilters): boolean {
   return filters.months.length > 0 || isDimensionFiltered(filters.services) || isDimensionFiltered(filters.serviceOfferings);
 }
 
+/**
+ * Multi-select toggle of one value: adds it when absent, removes it when present,
+ * and keeps every other value and the missing-value choice as they are.
+ * The one rule shared by every control that edits a dimension selection.
+ */
+export function toggleSelectionValue(selection: DimensionSelection, value: string): DimensionSelection {
+  const values = selection.values.includes(value) ? selection.values.filter(v => v !== value) : [...selection.values, value];
+  return { ...selection, values };
+}
+
+/** Multi-select toggle of the missing-value option ("No Service" / "No Offering"); values are kept. */
+export function toggleSelectionMissing(selection: DimensionSelection): DimensionSelection {
+  return { ...selection, includeMissing: !selection.includeMissing };
+}
+
 /** A predicate for one dimension selection, or null when it does not filter. */
 function dimensionPredicate(selection: DimensionSelection): ((value: string | null) => boolean) | null {
   if (!isDimensionFiltered(selection)) return null;

@@ -215,7 +215,7 @@ describe('S1 metric invariants and closures', () => {
   });
 
   it('display configuration is named, versioned and as approved', () => {
-    expect(DISPLAY_CONFIG_VERSION).toBe('1.0.0');
-    expect(ORIGEN_DISPLAY).toEqual({ matrixServices: 15, matrixAssignmentGroups: 8, monthlySeries: 10, tablePageSize: 25 });
+    expect(DISPLAY_CONFIG_VERSION).toBe('1.1.0');
+    expect(ORIGEN_DISPLAY).toEqual({ matrixServices: 15, matrixAssignmentGroups: 8, monthlySeries: 10, rankingChartServices: 10, tablePageSize: 25 });
   });
 });

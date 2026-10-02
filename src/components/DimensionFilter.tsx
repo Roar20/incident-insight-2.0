@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command';
-import type { DimensionSelection } from '@/lib/problemView';
+import { toggleSelectionMissing, toggleSelectionValue, type DimensionSelection } from '@/lib/problemView';
 import type { DimensionOptions, FacetCounts } from '@/lib/serviceDimension';
 
 /**
@@ -37,11 +37,8 @@ export default function DimensionFilter({ label, allLabel, missingLabel, options
   const selected = new Set(selection.values);
   const active = selection.values.length + (selection.includeMissing ? 1 : 0);
 
-  const toggleValue = (value: string) => {
-    const values = selected.has(value) ? selection.values.filter(v => v !== value) : [...selection.values, value];
-    onChange({ ...selection, values });
-  };
-  const toggleMissing = () => onChange({ ...selection, includeMissing: !selection.includeMissing });
+  const toggleValue = (value: string) => onChange(toggleSelectionValue(selection, value));
+  const toggleMissing = () => onChange(toggleSelectionMissing(selection));
 
   const summary = active === 0
     ? allLabel

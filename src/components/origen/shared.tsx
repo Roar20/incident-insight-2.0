@@ -24,8 +24,8 @@ export function Section({ title, hint, children }: { title: string; hint?: strin
   return (
     <section className="mb-8">
       <div className="flex items-baseline gap-3 mb-3 flex-wrap">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{title}</h3>
-        {hint && <span className="text-[11px] text-muted-foreground/70">{hint}</span>}
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-wider text-foreground/75">{title}</h3>
+        {hint && <span className="text-[11px] text-foreground/70">{hint}</span>}
       </div>
       {children}
     </section>
