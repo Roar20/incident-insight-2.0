@@ -5,6 +5,12 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import type { DimensionSelection } from '@/lib/problemView';
 import type { DimensionOptions, FacetCounts } from '@/lib/serviceDimension';
 
+/**
+ * The popover is dark, so text uses the popover tokens; muted-foreground is
+ * meant for the light page background and is too dark here.
+ */
+const COUNT_CLASS = 'font-mono text-[11px] text-popover-foreground/75';
+
 interface Props {
   /** e.g. "Service". */
   label: string;
@@ -77,8 +83,8 @@ export default function DimensionFilter({ label, allLabel, missingLabel, options
                     className="gap-2"
                   >
                     <Check className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'opacity-100' : 'opacity-0'}`} />
-                    <span className="truncate flex-1 text-[12px]">{value}</span>
-                    <span className="font-mono text-[11px] text-muted-foreground">{count}</span>
+                    <span className={`truncate flex-1 text-[12px] ${isSelected ? 'font-semibold' : ''}`}>{value}</span>
+                    <span className={COUNT_CLASS}>{count}</span>
                   </CommandItem>
                 );
               })}
@@ -94,8 +100,8 @@ export default function DimensionFilter({ label, allLabel, missingLabel, options
                     className="gap-2"
                   >
                     <Check className={`w-3.5 h-3.5 shrink-0 ${selection.includeMissing ? 'opacity-100' : 'opacity-0'}`} />
-                    <span className="flex-1 text-[12px] italic">{missingLabel}</span>
-                    <span className="font-mono text-[11px] text-muted-foreground">{counts.missing}</span>
+                    <span className={`flex-1 text-[12px] italic ${selection.includeMissing ? 'font-semibold' : ''}`}>{missingLabel}</span>
+                    <span className={COUNT_CLASS}>{counts.missing}</span>
                   </CommandItem>
                 </CommandGroup>
               </>
@@ -105,7 +111,7 @@ export default function DimensionFilter({ label, allLabel, missingLabel, options
             <button
               type="button"
               onClick={() => onChange({ values: [], includeMissing: false })}
-              className="w-full border-t border-border px-3 py-2 text-left font-mono text-[11px] text-muted-foreground hover:text-foreground"
+              className="w-full border-t border-border px-3 py-2 text-left font-mono text-[11px] text-popover-foreground/75 hover:text-popover-foreground"
             >
               Clear {label} filter
             </button>
