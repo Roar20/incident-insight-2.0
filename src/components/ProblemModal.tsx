@@ -1,6 +1,8 @@
 import type { ProblemCluster } from '@/lib/problems';
 import { getScoreColor } from '@/components/ui/dashboard-primitives';
 import ExportButton from '@/components/ExportButton';
+import { ProblemOrigenDetail, VisibleOfTotal } from '@/components/ProblemOrigenContext';
+import type { CandidateOrigenContext } from '@/lib/serviceDimension';
 import { formatDuration } from '@/lib/periods';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -13,6 +15,8 @@ interface Props {
   exporting?: boolean;
   /** When set, export is disabled and this explains why. */
   exportDisabledReason?: string;
+  /** Service context of the visible incidents, and visible vs full membership. */
+  origen?: CandidateOrigenContext;
 }
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
@@ -24,7 +28,7 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-export default function ProblemModal({ cluster, onClose, onExport, exporting = false, exportDisabledReason }: Props) {
+export default function ProblemModal({ cluster, onClose, onExport, exporting = false, exportDisabledReason, origen }: Props) {
   const undocumented = cluster.count - cluster.documentedCount;
 
   return (
@@ -67,6 +71,9 @@ export default function ProblemModal({ cluster, onClose, onExport, exporting = f
           </div>
 
           <div className="p-5 space-y-6">
+            {origen && origen.visibleCount < origen.totalCount && (
+              <div className="text-[12px] -mb-3"><VisibleOfTotal context={origen} /></div>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
               <Stat label="Incidents" value={cluster.count} />
               <Stat label="Share" value={`${cluster.share}%`} />
@@ -165,6 +172,8 @@ export default function ProblemModal({ cluster, onClose, onExport, exporting = f
                 </div>
               </div>
             </div>
+
+            {origen && <ProblemOrigenDetail context={origen} />}
 
             <div>
               <div className="font-mono text-[11px] font-bold uppercase tracking-wider text-card-foreground/50 mb-2">

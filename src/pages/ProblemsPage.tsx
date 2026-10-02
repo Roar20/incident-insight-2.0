@@ -7,6 +7,8 @@ import GlobalFilters from '@/components/GlobalFilters';
 import ProblemModal from '@/components/ProblemModal';
 import ExportButton from '@/components/ExportButton';
 import { useProblemExport } from '@/hooks/useProblemExport';
+import { useCandidateOrigen } from '@/hooks/useCandidateOrigen';
+import { ProblemOrigenLine } from '@/components/ProblemOrigenContext';
 import type { ProblemCluster, ActionKind } from '@/lib/problems';
 import { filterVisibleProblems, type ProblemListFilters } from '@/lib/problemView';
 import { formatDuration } from '@/lib/periods';
@@ -42,6 +44,7 @@ export default function ProblemsPage() {
   const [onlyUndocumented, setOnlyUndocumented] = useState(false);
   const [selected, setSelected] = useState<ProblemCluster | null>(null);
   const { exportProblems, exporting } = useProblemExport();
+  const origenOf = useCandidateOrigen();
 
   const listFilters = useMemo<ProblemListFilters>(
     () => ({ search, category: categoryFilter, onlyUndocumented }),
@@ -122,7 +125,8 @@ export default function ProblemsPage() {
                     <span className="font-mono text-[11px] text-card-foreground/40 ml-auto">{a.cluster.count} incidents</span>
                   </div>
                   <div className="text-[13px] text-card-foreground leading-snug mb-1.5">{a.cluster.title}</div>
-                  <div className="text-[12px] text-card-foreground/55 leading-snug">{a.reason}</div>
+                  <div className="text-[12px] text-card-foreground/55 leading-snug mb-2">{a.reason}</div>
+                  <ProblemOrigenLine context={origenOf(a.cluster.id)} />
                 </button>
               );
             })}
@@ -225,6 +229,7 @@ export default function ProblemsPage() {
                       {p.isChronic && (
                         <span className="inline-block mt-1 font-mono text-[9px] uppercase tracking-wider text-score-critical bg-score-critical/10 px-1.5 py-0.5 rounded">chronic</span>
                       )}
+                      <div className="mt-1"><ProblemOrigenLine context={origenOf(p.id)} /></div>
                     </td>
                     <td className="px-4 py-2.5 text-card-foreground/60 whitespace-nowrap">{p.category}</td>
                     <td className="px-4 py-2.5 font-mono font-bold text-card-foreground">{p.count}</td>
@@ -250,6 +255,7 @@ export default function ProblemsPage() {
           onExport={() => exportProblems('problem', [selected], listFilters)}
           exporting={exporting}
           exportDisabledReason={isDimensionFilterActive ? DIMENSION_FILTER_EXPORT_NOTICE : undefined}
+          origen={origenOf(selected.id)}
         />
       )}
     </div>
