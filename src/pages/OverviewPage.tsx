@@ -4,7 +4,7 @@ import { KPICard, SectionTitle, DimensionBar, EmptyState, getScoreColor, getScor
 import { computeStateDist } from '@/lib/analytics';
 import { formatDuration } from '@/lib/periods';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import MonthFilter from '@/components/MonthFilter';
+import GlobalFilters from '@/components/GlobalFilters';
 
 const LABEL_COLORS = {
   Excellent: 'hsl(145,70%,38%)',
@@ -55,8 +55,8 @@ export default function OverviewPage() {
   if (overview.total === 0) {
     return (
       <div className="animate-fade-in">
-        <MonthFilter />
-        <EmptyState message="No incidents match the selected months." />
+        <GlobalFilters />
+        <EmptyState message="No incidents match the current filters." />
       </div>
     );
   }
@@ -91,7 +91,7 @@ export default function OverviewPage() {
 
   return (
     <div className="animate-fade-in">
-      <MonthFilter />
+      <GlobalFilters />
       <ExecutiveInsightBanner insights={insights.slice(0, 6)} />
 
       <SectionTitle>Key Metrics</SectionTitle>

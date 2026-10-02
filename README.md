@@ -79,6 +79,7 @@ human-generated; only human notes count toward the noise ratio and note counts.
 | Overview | How healthy is the documentation, and how is the service performing? |
 | Weekly Review | What changed this week, and what should I raise in the review? |
 | Problems & RCA | What keeps recurring, why, and where should we act first? |
+| Origen | Which Services and Service offerings is the volume associated with, and which groups handle it? |
 | Trends | How are quality and risk moving month over month? |
 | Text Quality | Where specifically is the writing falling short? |
 | All Incidents / By Agent / By Group | Drill-down and coaching |
@@ -121,7 +122,38 @@ one the team keeps re-fixing without ever learning why.
 The volume bar scales with the dataset (1% of incidents, minimum 3), so a small
 export still produces recommendations and a large one is not swamped by them.
 
-## Exporting problems
+## Origen and the Service filters
+
+When the export has `Service` and/or `Service offering` columns, the dashboard
+adds a Service and a Service offering filter next to the month filter, and an
+**Origen** view. Origen describes the Service / Service offering context of the
+incident population; on its own it does not establish technical causality,
+ownership or a ticket's reassignment path.
+
+- **Filters narrow the population, never the problems.** Month, Service and
+  Service offering are applied together as an intersection to the incidents.
+  Problems are then regrouped by the `clusterId` each incident got once, over
+  the whole file, when it was loaded — nothing is reclustered. A problem's
+  metrics are computed on its visible incidents; when filters hide part of it,
+  cards, rows and the modal say "N of M incidents of this problem visible".
+- **Filter options** are every value in the file, fixed while it is loaded.
+  Counts apply the other filters but not the option's own one; an option at
+  zero is disabled unless selected, and selections are never dropped. "No
+  Service" / "No Offering" select incidents without a value.
+- **Missing values are not values.** Incidents without a Service are shown as a
+  separate "No Service" row; they are never ranked, never a top Service and
+  never counted as a distinct Service. A file without the column shows the
+  feature as not available rather than as zero.
+- **Top Service** is descriptive: the most frequent Service among a problem's
+  visible incidents that have one, with its share of those incidents. Equal
+  counts are shown as a tie. There is no dominance threshold.
+- **Display limits** (matrix 15 Services × 8 groups, 10 monthly series, 25 rows
+  per page) live in `src/config/display.ts`. Anything beyond them is summed
+  into a labelled "Others" row for display only and stays reachable in the
+  full tables.
+- Export is disabled while a Service or Service offering filter is active; the
+  month filter exports as before.
+
 
 **Exportar** on the Problems & RCA view downloads every problem the table is
 showing; the same button in a problem's detail modal downloads just that
@@ -162,7 +194,8 @@ src/lib/periods.ts      ISO weeks, resolution times, duration formatting
 src/lib/trends.ts       Weekly and monthly period aggregation
 src/lib/weekly.ts       The weekly digest: baselines, movements, new vs recurring
 src/lib/analytics.ts    Overview, dimensions, agent and group aggregation
-src/lib/problemView.ts  Month and Problems-view filters shared by the UI and the export
+src/lib/problemView.ts  Global filters (month ∩ Service ∩ Offering) and Problems-view filters
+src/lib/serviceDimension.ts  Origen metrics over the visible incidents
 src/lib/exportProblems.ts  XLSX export of problems (loaded on demand)
 src/workers/            Web Worker that runs the above off the main thread
 src/context/AppContext  Loaded dataset, month filtering, derived stats

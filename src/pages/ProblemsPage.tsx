@@ -3,13 +3,19 @@ import { useAppContext } from '@/context/AppContext';
 import {
   KPICard, SectionTitle, EmptyState, getScoreColor,
 } from '@/components/ui/dashboard-primitives';
-import MonthFilter from '@/components/MonthFilter';
+import GlobalFilters from '@/components/GlobalFilters';
 import ProblemModal from '@/components/ProblemModal';
 import ExportButton from '@/components/ExportButton';
 import { useProblemExport } from '@/hooks/useProblemExport';
+import { useCandidateOrigen } from '@/hooks/useCandidateOrigen';
+import { ProblemOrigenLine } from '@/components/ProblemOrigenContext';
 import type { ProblemCluster, ActionKind } from '@/lib/problems';
 import { filterVisibleProblems, type ProblemListFilters } from '@/lib/problemView';
 import { formatDuration } from '@/lib/periods';
+
+/** Shown while a Service or Service offering filter blocks export (handled in S5). */
+const DIMENSION_FILTER_EXPORT_NOTICE =
+  'Export is not available while a Service or Service offering filter is active. Clear those filters to export; the month filter is supported.';
 import { Search, AlertTriangle, Bot, HelpCircle, Repeat } from 'lucide-react';
 
 const ACTION_META: Record<ActionKind, { icon: typeof AlertTriangle; tone: string; label: string }> = {
@@ -32,12 +38,13 @@ function CoverageBar({ pct }: { pct: number }) {
 }
 
 export default function ProblemsPage() {
-  const { filteredProblems, filteredCategories, filteredActions, filteredIncidents } = useAppContext();
+  const { filteredProblems, filteredCategories, filteredActions, filteredIncidents, isDimensionFilterActive } = useAppContext();
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [onlyUndocumented, setOnlyUndocumented] = useState(false);
   const [selected, setSelected] = useState<ProblemCluster | null>(null);
   const { exportProblems, exporting } = useProblemExport();
+  const origenOf = useCandidateOrigen();
 
   const listFilters = useMemo<ProblemListFilters>(
     () => ({ search, category: categoryFilter, onlyUndocumented }),
@@ -68,15 +75,15 @@ export default function ProblemsPage() {
   if (filteredIncidents.length === 0) {
     return (
       <div className="animate-fade-in">
-        <MonthFilter />
-        <EmptyState message="No incidents match the selected months." />
+        <GlobalFilters />
+        <EmptyState message="No incidents match the current filters." />
       </div>
     );
   }
 
   return (
     <div className="animate-fade-in">
-      <MonthFilter />
+      <GlobalFilters />
 
       <SectionTitle>Problem Overview</SectionTitle>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 mb-6">
@@ -118,7 +125,8 @@ export default function ProblemsPage() {
                     <span className="font-mono text-[11px] text-card-foreground/40 ml-auto">{a.cluster.count} incidents</span>
                   </div>
                   <div className="text-[13px] text-card-foreground leading-snug mb-1.5">{a.cluster.title}</div>
-                  <div className="text-[12px] text-card-foreground/55 leading-snug">{a.reason}</div>
+                  <div className="text-[12px] text-card-foreground/55 leading-snug mb-2">{a.reason}</div>
+                  <ProblemOrigenLine context={origenOf(a.cluster.id)} />
                 </button>
               );
             })}
@@ -186,10 +194,15 @@ export default function ProblemsPage() {
         <ExportButton
           onClick={() => exportProblems('view', visible, listFilters)}
           busy={exporting}
-          disabled={visible.length === 0}
-          title="Export the problems listed below, with all their incidents, to XLSX"
+          disabled={visible.length === 0 || isDimensionFilterActive}
+          title={isDimensionFilterActive
+            ? DIMENSION_FILTER_EXPORT_NOTICE
+            : 'Export the problems listed below, with all their incidents, to XLSX'}
         />
       </div>
+      {isDimensionFilterActive && (
+        <div className="text-[12px] text-muted-foreground -mt-3 mb-5 text-right">{DIMENSION_FILTER_EXPORT_NOTICE}</div>
+      )}
 
       {visible.length === 0 ? (
         <EmptyState message="No recurring problems match these filters. A problem needs to appear at least twice." />
@@ -216,6 +229,7 @@ export default function ProblemsPage() {
                       {p.isChronic && (
                         <span className="inline-block mt-1 font-mono text-[9px] uppercase tracking-wider text-score-critical bg-score-critical/10 px-1.5 py-0.5 rounded">chronic</span>
                       )}
+                      <div className="mt-1"><ProblemOrigenLine context={origenOf(p.id)} /></div>
                     </td>
                     <td className="px-4 py-2.5 text-card-foreground/60 whitespace-nowrap">{p.category}</td>
                     <td className="px-4 py-2.5 font-mono font-bold text-card-foreground">{p.count}</td>
@@ -240,6 +254,8 @@ export default function ProblemsPage() {
           onClose={() => setSelected(null)}
           onExport={() => exportProblems('problem', [selected], listFilters)}
           exporting={exporting}
+          exportDisabledReason={isDimensionFilterActive ? DIMENSION_FILTER_EXPORT_NOTICE : undefined}
+          origen={origenOf(selected.id)}
         />
       )}
     </div>

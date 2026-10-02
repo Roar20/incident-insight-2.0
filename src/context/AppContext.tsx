@@ -10,7 +10,9 @@ import { computeProblemClusters, computeCategoryStats, recommendActions } from '
 import { computePeriodTrends, type PeriodTrend } from '@/lib/trends';
 import { availableWeeks } from '@/lib/weekly';
 import type { SourceColumn } from '@/lib/parser';
-import { filterByMonths } from '@/lib/problemView';
+import { ALL_VALUES, filterIncidents, isAnyFilterActive, isDimensionFiltered, type DimensionSelection, type GlobalFilters } from '@/lib/problemView';
+import { dimensionAvailability as availabilityOf, type DimensionAvailability } from '@/lib/dimensions';
+import { clusterSizes } from '@/lib/serviceDimension';
 import type { WorkerMessage } from '@/workers/scoringWorker';
 
 export interface MonthOption {
@@ -39,6 +41,10 @@ interface AppState {
   rawTextTrimmed: boolean;
   availableMonths: MonthOption[];
   selectedMonths: string[];
+  /** Global Service filter; empty means all Services, with or without a value. */
+  serviceSelection: DimensionSelection;
+  /** Global Service offering filter; empty means all Offerings, with or without a value. */
+  offeringSelection: DimensionSelection;
   availableWeeks: string[];
   selectedWeek: string;
 }
@@ -48,7 +54,18 @@ interface AppContextType extends AppState {
   setCurrentPage: (page: string) => void;
   setFilterLabel: (label: string) => void;
   setSelectedMonths: (months: string[]) => void;
+  setServiceSelection: (selection: DimensionSelection) => void;
+  setOfferingSelection: (selection: DimensionSelection) => void;
+  clearDimensionFilters: () => void;
   setSelectedWeek: (week: string) => void;
+  /** Month ∩ Service ∩ Service offering, as applied to filteredIncidents. */
+  globalFilters: GlobalFilters;
+  /** True when a Service or Service offering filter is active (not the month filter). */
+  isDimensionFilterActive: boolean;
+  /** Which optional dimensions the loaded file has. */
+  dimensionAvailability: DimensionAvailability;
+  /** Incidents per clusterId over the whole dataset: each problem's full membership, ignoring filters. */
+  candidateTotals: Map<string, number>;
   filteredIncidents: AnnotatedIncident[];
   filteredScores: IncidentScore[];
   filteredOverview: OverviewStats | null;
@@ -91,6 +108,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rawTextTrimmed: false,
     availableMonths: [],
     selectedMonths: [],
+    serviceSelection: ALL_VALUES,
+    offeringSelection: ALL_VALUES,
     availableWeeks: [],
     selectedWeek: '',
   });
@@ -161,6 +180,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             agentStats, groupStats, loaded: true, loading: false,
             fileName: name, sourceColumns, rawTextTrimmed, currentPage: 'overview',
             availableMonths, selectedMonths: [],
+            // Selections belong to the file they were made on.
+            serviceSelection: ALL_VALUES, offeringSelection: ALL_VALUES,
             // Default the weekly review to the most recent complete week of data.
             availableWeeks: weeks, selectedWeek: weeks[weeks.length - 1] ?? '',
             loadingProgress: 100, loadingMessage: '',
@@ -216,46 +237,68 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, selectedMonths: months }));
   }, []);
 
+  const setServiceSelection = useCallback((selection: DimensionSelection) => {
+    setState(prev => ({ ...prev, serviceSelection: selection }));
+  }, []);
+
+  const setOfferingSelection = useCallback((selection: DimensionSelection) => {
+    setState(prev => ({ ...prev, offeringSelection: selection }));
+  }, []);
+
+  const clearDimensionFilters = useCallback(() => {
+    setState(prev => ({ ...prev, serviceSelection: ALL_VALUES, offeringSelection: ALL_VALUES }));
+  }, []);
+
   const setSelectedWeek = useCallback((week: string) => {
     setState(prev => ({ ...prev, selectedWeek: week }));
   }, []);
 
-  // When no month is selected the filtered views are just the precomputed
-  // whole-dataset stats. When a month *is* selected the stats are always
-  // recomputed from that subset — including when the subset is empty, so an
-  // empty selection renders an empty dashboard rather than the all-time numbers.
-  const isMonthFiltered = state.selectedMonths.length > 0;
+  const globalFilters = useMemo<GlobalFilters>(() => ({
+    months: state.selectedMonths,
+    services: state.serviceSelection,
+    serviceOfferings: state.offeringSelection,
+  }), [state.selectedMonths, state.serviceSelection, state.offeringSelection]);
+
+  const isDimensionFilterActive = isDimensionFiltered(state.serviceSelection) || isDimensionFiltered(state.offeringSelection);
+
+  // With no filter active the filtered views are just the precomputed
+  // whole-dataset stats. With any filter (month, Service, Service offering) the
+  // stats are always recomputed from that subset — including when the subset is
+  // empty, so an empty selection renders an empty dashboard rather than the
+  // all-time numbers. Filters only narrow the population; clusterId was assigned
+  // once in the worker and problems below regroup by it, never recluster.
+  const isFiltered = isAnyFilterActive(globalFilters);
 
   const filteredIncidents = useMemo(() => {
-    if (!isMonthFiltered) return state.incidents;
-    return filterByMonths(state.incidents, state.selectedMonths);
-  }, [state.incidents, state.selectedMonths, isMonthFiltered]);
+    if (!isFiltered) return state.incidents;
+    return filterIncidents(state.incidents, globalFilters);
+  }, [state.incidents, globalFilters, isFiltered]);
 
   const filteredScores = useMemo(() => {
-    if (!isMonthFiltered) return state.scores;
+    if (!isFiltered) return state.scores;
     const nums = new Set(filteredIncidents.map(i => i.Number));
     return state.scores.filter(s => nums.has(s.number));
-  }, [state.scores, filteredIncidents, isMonthFiltered]);
+  }, [state.scores, filteredIncidents, isFiltered]);
 
   const filteredOverview = useMemo(() =>
-    isMonthFiltered ? computeOverview(filteredIncidents, filteredScores) : state.overview,
-    [isMonthFiltered, filteredIncidents, filteredScores, state.overview]);
+    isFiltered ? computeOverview(filteredIncidents, filteredScores) : state.overview,
+    [isFiltered, filteredIncidents, filteredScores, state.overview]);
 
   const filteredDimStats = useMemo(() =>
-    isMonthFiltered ? computeDimStats(filteredScores) : state.dimStats,
-    [isMonthFiltered, filteredScores, state.dimStats]);
+    isFiltered ? computeDimStats(filteredScores) : state.dimStats,
+    [isFiltered, filteredScores, state.dimStats]);
 
   const filteredFeedbackItems = useMemo(() =>
-    isMonthFiltered ? computeFeedback(filteredScores) : state.feedbackItems,
-    [isMonthFiltered, filteredScores, state.feedbackItems]);
+    isFiltered ? computeFeedback(filteredScores) : state.feedbackItems,
+    [isFiltered, filteredScores, state.feedbackItems]);
 
   const filteredAgentStats = useMemo(() =>
-    isMonthFiltered ? computeAgentStats(filteredIncidents, filteredScores) : state.agentStats,
-    [isMonthFiltered, filteredIncidents, filteredScores, state.agentStats]);
+    isFiltered ? computeAgentStats(filteredIncidents, filteredScores) : state.agentStats,
+    [isFiltered, filteredIncidents, filteredScores, state.agentStats]);
 
   const filteredGroupStats = useMemo(() =>
-    isMonthFiltered ? computeGroupStats(filteredIncidents, filteredScores) : state.groupStats,
-    [isMonthFiltered, filteredIncidents, filteredScores, state.groupStats]);
+    isFiltered ? computeGroupStats(filteredIncidents, filteredScores) : state.groupStats,
+    [isFiltered, filteredIncidents, filteredScores, state.groupStats]);
 
   // Clustering already happened in the worker, so these only regroup by the
   // cluster id each incident carries — cheap enough to redo per filter change.
@@ -271,6 +314,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     recommendActions(filteredProblems, filteredIncidents.length),
     [filteredProblems, filteredIncidents.length]);
 
+  const dimensionAvailability = useMemo(() => availabilityOf(state.sourceColumns), [state.sourceColumns]);
+
+  // Full membership of every problem, independent of any filter.
+  const candidateTotals = useMemo(() => clusterSizes(state.incidents), [state.incidents]);
+
   // Trends deliberately span the whole dataset: a trend over a filtered slice of
   // months is not a trend.
   const weeklyTrends = useMemo(() =>
@@ -285,6 +333,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider value={{
       ...state,
       loadFile, setCurrentPage, setFilterLabel, setSelectedMonths, setSelectedWeek,
+      setServiceSelection, setOfferingSelection, clearDimensionFilters,
+      globalFilters, isDimensionFilterActive, dimensionAvailability, candidateTotals,
       filteredIncidents, filteredScores,
       filteredOverview, filteredDimStats, filteredFeedbackItems,
       filteredAgentStats, filteredGroupStats,

@@ -1,5 +1,5 @@
 import { useAppContext } from '@/context/AppContext';
-import { BarChart3, FileText, Users, Building2, LayoutDashboard, TrendingUp, CalendarRange, Search, type LucideIcon } from 'lucide-react';
+import { BarChart3, FileText, Users, Building2, LayoutDashboard, TrendingUp, CalendarRange, Search, Compass, type LucideIcon } from 'lucide-react';
 
 interface NavItem {
   id: string;
@@ -11,6 +11,7 @@ const pages: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'weekly', label: 'Weekly Review', icon: CalendarRange },
   { id: 'problems', label: 'Problems & RCA', icon: Search },
+  { id: 'origen', label: 'Origen', icon: Compass },
   { id: 'trends', label: 'Trends', icon: TrendingUp },
   { id: 'textquality', label: 'Text Quality', icon: BarChart3 },
   { id: 'incidents', label: 'All Incidents', icon: FileText },

@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { AUTO_DESCRIPTION_KEYWORDS, SYSTEM_NOTE_AUTHORS, SYSTEM_NOTE_PHRASES } from '../config/patterns';
 
 export interface RawIncident {
   Number: string;
@@ -49,18 +50,11 @@ export interface EnrichedIncident extends RawIncident {
  */
 const NOTE_HEADER_RE = /(^|\n|_x000D_)[ \t]*((?:\d{4}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{4})[ T]+\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]*[AaPp][Mm])?)[ \t]*-[ \t]*([^\n]+?)[ \t]*\([^()\n]+\)[ \t]*(?=_x000D_|\r?\n|$)/g;
 
-const SYSTEM_PHRASES = [
-  "sent communication to", "could not contact", "task is created by system",
-  "escalation is in progress", "escalate in", "faq on alerts",
-  "predicted ag:", "attachment added", "why was this incident created",
-  "how is the priority", "confidence:",
-];
-
-const AUTO_DESC_KW = [
-  "we have identified unusually", "alert triggered at", "usage overview",
-  "cluster name", "namespace :", "container name:", "pod name:",
-  "document count:", "conditions met:", "links for investigation",
-];
+// Instance/tool wording for system notes and alert descriptions lives in the
+// versioned registry, src/config/patterns.ts.
+const SYSTEM_PHRASES = SYSTEM_NOTE_PHRASES.values;
+const SYSTEM_AUTHORS = SYSTEM_NOTE_AUTHORS.values;
+const AUTO_DESC_KW = AUTO_DESCRIPTION_KEYWORDS.values;
 
 function cleanText(text: string): string {
   if (!text) return "";
@@ -97,7 +91,7 @@ function parseNotes(raw: string): NoteEntry[] {
   // Each entry's body runs from the end of its header to the next header.
   const entries: NoteEntry[] = headers.map((h, i) => {
     const text = cleanText(raw.slice(h.end, headers[i + 1]?.start ?? raw.length));
-    const isSystem = h.author.toLowerCase() === 'system' || isSystemText(text);
+    const isSystem = SYSTEM_AUTHORS.includes(h.author.toLowerCase()) || isSystemText(text);
     return { timestamp: h.timestamp, author: h.author, text, isSystem };
   });
   if (entries.length === 0 && raw.trim()) {
@@ -114,7 +108,7 @@ export type IncidentRow = Record<string, unknown>;
  * first, then the field name. Every header listed here is mapped; any other
  * column is kept verbatim in `extraFields`.
  */
-const SOURCE_COLUMNS = {
+export const SOURCE_COLUMNS = {
   Number: ['Number', 'number'],
   'Task type': ['Task type', 'sys_class_name'],
   Priority: ['Priority', 'priority'],
