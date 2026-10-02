@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { describe, it, expect } from 'vitest';
 import { DIMENSION_FIELDS, OPTIONAL_DIMENSION_ALIASES, SCHEMA_CONFIG_VERSION } from '../config/schema';
-import { dimensionSourceHeader, getDimension } from './dimensions';
+import { canonicalSourceHeader, dimensionAvailability, dimensionSourceHeader, getDimension } from './dimensions';
 import { enrichRow, isMappedColumn, readIncidentTable } from './parser';
 
 function xlsxBuffer(rows: Record<string, unknown>[]): ArrayBuffer {
@@ -68,5 +68,14 @@ describe('dimensionSourceHeader', () => {
     expect(dimensionSourceHeader('service', columns)).toBe('Service');
     expect(dimensionSourceHeader('serviceOffering', columns)).toBeNull();
     expect(dimensionSourceHeader('resolutionCode', [])).toBeNull();
+  });
+});
+
+describe('dimension availability', () => {
+  it('reports which dimensions a file has, telling an absent column from blank cells', () => {
+    const { columns } = readIncidentTable(xlsxBuffer([{ Number: 'INC1', Service: '', assignment_group: 'AG-1' }]));
+    expect(dimensionAvailability(columns)).toEqual({ service: true, serviceOffering: false, assignmentGroup: true });
+    expect(canonicalSourceHeader('Assignment group', columns)).toBe('assignment_group');
+    expect(dimensionAvailability([])).toEqual({ service: false, serviceOffering: false, assignmentGroup: false });
   });
 });

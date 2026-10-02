@@ -8,7 +8,7 @@
  * invents a bucket for a missing value: absent or blank reads as null.
  */
 import { OPTIONAL_DIMENSION_ALIASES, type DimensionField } from '../config/schema';
-import type { EnrichedIncident, SourceColumn } from './parser';
+import { SOURCE_COLUMNS, type EnrichedIncident, type SourceColumn } from './parser';
 
 /** A dimension value as written, trimmed; null when the cell is blank or missing. */
 function normalize(value: unknown): string | null {
@@ -39,4 +39,29 @@ export function getDimension(incident: Pick<EnrichedIncident, 'extraFields'>, fi
     if (alias in extras) return normalize(extras[alias]);
   }
   return null;
+}
+
+/**
+ * The source header that carries a canonical field in this file, or null when
+ * the file has none of its aliases. Canonical fields read as '' when missing,
+ * so this is how an absent column is told apart from blank cells.
+ */
+export function canonicalSourceHeader(field: keyof typeof SOURCE_COLUMNS, columns: readonly Pick<SourceColumn, 'name'>[]): string | null {
+  const names = new Set(columns.map(c => c.name));
+  return SOURCE_COLUMNS[field].find(alias => names.has(alias)) ?? null;
+}
+
+/** Which optional dimensions the loaded file has. A missing one is NOT_AVAILABLE, never empty. */
+export interface DimensionAvailability {
+  service: boolean;
+  serviceOffering: boolean;
+  assignmentGroup: boolean;
+}
+
+export function dimensionAvailability(columns: readonly Pick<SourceColumn, 'name'>[]): DimensionAvailability {
+  return {
+    service: dimensionSourceHeader('service', columns) !== null,
+    serviceOffering: dimensionSourceHeader('serviceOffering', columns) !== null,
+    assignmentGroup: canonicalSourceHeader('Assignment group', columns) !== null,
+  };
 }
