@@ -141,6 +141,16 @@ export function dimensionPlural(dimension: OrigenDimension): string {
   return DIMENSION_PLURAL[dimension];
 }
 
+const DIMENSION_SINGULAR: Record<OrigenDimension, string> = {
+  assignmentGroup: 'Handling Group',
+  service: 'Service',
+  serviceOffering: 'Service Offering',
+};
+
+export function dimensionSingular(dimension: OrigenDimension): string {
+  return DIMENSION_SINGULAR[dimension];
+}
+
 /** "83% of incidents in view are handled by 3 of 10 Handling Groups" (or "associated with … Services"). */
 export function concentrationSentence(dimension: OrigenDimension, top: TopShare): string {
   const verb = dimension === 'assignmentGroup' ? 'handled by' : 'associated with';
