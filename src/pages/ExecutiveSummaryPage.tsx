@@ -15,8 +15,9 @@ import { formatDuration } from '@/lib/periods';
 import { dimensionTable, fraction, type DimensionTable, type OrigenDimension } from '@/lib/serviceDimension';
 import {
   dimensionPlural, dimensionSingular, headline, lookDimension, medianResolutionHours, patternBreadth,
-  pctText, periodSpan, slaSignal, topShare,
+  pctText, periodSpan, topShare,
 } from '@/lib/executiveSummary';
+import { slaSignal } from '@/lib/slaSignal';
 
 const EXECUTIVE_TOOLTIP =
   'A decision view of the incidents visible under the current filters. Directional figures are for discussion, not conclusions; '

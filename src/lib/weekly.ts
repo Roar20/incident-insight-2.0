@@ -14,6 +14,17 @@ import { weekRangeLabel } from './periods';
 /** Weeks of history averaged to decide whether the current week is unusual. */
 const BASELINE_WEEKS = 4;
 
+/**
+ * The baseline window for a week: the up-to-BASELINE_WEEKS weeks with data
+ * before it, oldest first. The one definition used by the digest and by any
+ * per-value "typical" (weekly composition), so they cannot diverge.
+ */
+export function baselineWeeksFor(weeks: string[], weekKey: string): string[] {
+  const position = weeks.indexOf(weekKey);
+  if (position < 0) return [];
+  return weeks.slice(Math.max(0, position - BASELINE_WEEKS), position);
+}
+
 /** A category must move by at least this much to be called out as a movement. */
 const MOVEMENT_THRESHOLD_PCT = 25;
 
@@ -23,8 +34,12 @@ const MOVEMENT_MIN_COUNT = 3;
 export interface CategoryMovement {
   name: string;
   count: number;
-  /** Mean count over the preceding baseline weeks. */
+  /** Mean count over the preceding baseline weeks, rounded for display. */
   baseline: number;
+  /** The same mean, unrounded — what `change` and the ordering use. */
+  typical: number;
+  /** count − typical, unrounded. */
+  change: number;
   /** Change against that baseline, in percent. */
   deltaPct: number;
   direction: 'up' | 'down';
@@ -83,7 +98,7 @@ export function computeWeeklyDigest(
   const currentIncidents = incidents.filter(i => i.week === weekKey);
   if (currentIncidents.length === 0) return null;
 
-  const baselineWeeks = weeks.slice(Math.max(0, position - BASELINE_WEEKS), position);
+  const baselineWeeks = baselineWeeksFor(weeks, weekKey);
   const baselineSet = new Set(baselineWeeks);
   const baselineIncidents = incidents.filter(i => baselineSet.has(i.week));
 
@@ -124,11 +139,16 @@ export function computeWeeklyDigest(
       name,
       count,
       baseline: Math.round(baseline * 10) / 10,
+      typical: baseline,
+      change: count - baseline,
       deltaPct,
       direction: deltaPct >= 0 ? 'up' : 'down',
     });
   }
-  categoryMovements.sort((a, b) => Math.abs(b.deltaPct) - Math.abs(a.deltaPct));
+  // Largest absolute change vs typical first (a percentage on a tiny base must
+  // not dominate); ties by this week's count, then name.
+  categoryMovements.sort((a, b) =>
+    Math.abs(b.change) - Math.abs(a.change) || b.count - a.count || a.name.localeCompare(b.name, 'en'));
 
   // Problems in this week, split by whether they are already known.
   const weekClusters = computeProblemClusters(currentIncidents, scores, 1);

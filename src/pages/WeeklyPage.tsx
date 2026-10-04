@@ -3,14 +3,20 @@ import { useAppContext } from '@/context/AppContext';
 import {
   KPICard, SectionTitle, EmptyState, ScoreBadge, getScoreColor,
 } from '@/components/ui/dashboard-primitives';
-import { computeWeeklyDigest } from '@/lib/weekly';
+import { baselineWeeksFor, computeWeeklyDigest } from '@/lib/weekly';
 import { formatDuration, weekLabel } from '@/lib/periods';
+import { canonicalSourceHeader } from '@/lib/dimensions';
+import { slaSignal } from '@/lib/slaSignal';
+import { dataThrough, formatChange, formatDataThrough } from '@/lib/weeklyComposition';
+import { WEEKLY_COPY } from '@/config/weekly';
+import WeeklyComposition from '@/components/WeeklyComposition';
+import { Tooltip as HoverTip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
 import {
-  ArrowDownRight, ArrowUpRight, Calendar, ChevronLeft, ChevronRight, Sparkles, Repeat,
+  Calendar, ChevronLeft, ChevronRight, Info, Sparkles, Repeat,
 } from 'lucide-react';
 
 const tooltipStyle = {
@@ -22,18 +28,9 @@ const tickStyle = { fontSize: 11, fill: 'hsl(215,12%,50%)' };
 /** How many weeks of history to plot behind the selected week. */
 const CHART_WEEKS = 12;
 
-function DeltaChip({ value, invert = false, suffix = '%' }: { value: number; invert?: boolean; suffix?: string }) {
-  if (value === 0) {
-    return <span className="font-mono text-[11px] text-muted-foreground">no change</span>;
-  }
-  const isGood = invert ? value < 0 : value > 0;
-  const Icon = value > 0 ? ArrowUpRight : ArrowDownRight;
-  return (
-    <span className={`inline-flex items-center gap-0.5 font-mono text-[11px] ${isGood ? 'text-score-excellent' : 'text-score-critical'}`}>
-      <Icon className="w-3 h-3" />
-      {value > 0 ? '+' : ''}{value}{suffix}
-    </span>
-  );
+function typicalText(typical: number): string {
+  const rounded = Math.round(typical * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
 function ProblemRow({
@@ -70,9 +67,14 @@ function ProblemRow({
 
 export default function WeeklyPage() {
   const {
-    incidents, scores, weeklyTrends,
+    incidents, scores, weeklyTrends, sourceColumns, dimensionAvailability,
     availableWeeks: weeks, selectedWeek, setSelectedWeek,
   } = useAppContext();
+
+  // Weekly Review has no filters: its analytical population is the loaded incidents.
+  const sla = useMemo(() => slaSignal(incidents, canonicalSourceHeader('Made SLA', sourceColumns) !== null), [incidents, sourceColumns]);
+  // A factual cutoff of the loaded file — no completeness is inferred from it.
+  const through = useMemo(() => dataThrough(incidents), [incidents]);
 
   const digest = useMemo(
     () => (selectedWeek ? computeWeeklyDigest(incidents, scores, selectedWeek) : null),
@@ -85,6 +87,10 @@ export default function WeeklyPage() {
     return weeklyTrends.slice(Math.max(0, end - CHART_WEEKS), end);
   }, [weeklyTrends, selectedWeek]);
 
+  // The composition draws the same weeks as "Incidents per week" and the baseline weeks the digest uses.
+  const compositionWeeks = useMemo(() => chartData.map(w => ({ key: w.key, label: w.label })), [chartData]);
+  const compositionBaseline = useMemo(() => baselineWeeksFor(weeks, selectedWeek), [weeks, selectedWeek]);
+
   if (weeks.length === 0) {
     return <EmptyState message="No incidents carry an Opened date, so weekly grouping is unavailable." />;
   }
@@ -93,7 +99,7 @@ export default function WeeklyPage() {
 
   const weekPicker = (
     <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Calendar className="w-4 h-4 text-muted-foreground" />
         <span className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground">
           Week of
@@ -107,6 +113,17 @@ export default function WeeklyPage() {
             <option key={w} value={w}>{weekLabel(w)}</option>
           ))}
         </select>
+        {through && (
+          <span className="flex items-center gap-1 text-[12px] text-muted-foreground" data-testid="data-through">
+            Data through {formatDataThrough(through)}
+            <HoverTip>
+              <TooltipTrigger asChild>
+                <button type="button" aria-label="About this date" className="hover:text-foreground"><Info className="w-3.5 h-3.5" /></button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs text-[12px] leading-snug">{WEEKLY_COPY.dataThroughCaveat}</TooltipContent>
+            </HoverTip>
+          </span>
+        )}
       </div>
       <div className="flex gap-1.5">
         <button
@@ -157,7 +174,6 @@ export default function WeeklyPage() {
         <KPICard
           label="vs Baseline"
           value={`${digest.volumeDeltaPct > 0 ? '+' : ''}${digest.volumeDeltaPct}%`}
-          colorClass={digest.volumeDeltaPct > 20 ? 'text-score-critical' : digest.volumeDeltaPct < -20 ? 'text-score-excellent' : undefined}
           sub="volume change"
         />
         <KPICard
@@ -171,12 +187,20 @@ export default function WeeklyPage() {
           value={formatDuration(current.medianResolutionHours)}
           sub={`${current.openCount} still open`}
         />
-        <KPICard
-          label="SLA Breached"
-          value={current.slaBreachPct === null ? '—' : `${current.slaBreachPct}%`}
-          colorClass={current.slaBreachPct !== null && current.slaBreachPct > 10 ? 'text-score-critical' : 'text-score-excellent'}
-          sub={previous && slaDelta !== 0 ? `${slaDelta > 0 ? '+' : ''}${slaDelta}pp vs last week` : 'of closed incidents'}
-        />
+        {sla.state === 'available' ? (
+          <KPICard
+            label="SLA Breached"
+            value={current.slaBreachPct === null ? '—' : `${current.slaBreachPct}%`}
+            colorClass={current.slaBreachPct === null ? undefined : current.slaBreachPct > 10 ? 'text-score-critical' : 'text-score-excellent'}
+            sub={previous && slaDelta !== 0 ? `${slaDelta > 0 ? '+' : ''}${slaDelta}pp vs last week` : 'of closed incidents'}
+          />
+        ) : (
+          <KPICard
+            label="SLA Breached"
+            value="—"
+            sub={sla.state === 'no-signal' ? WEEKLY_COPY.slaNoSignal : WEEKLY_COPY.slaNotAvailable}
+          />
+        )}
         <KPICard
           label="Root Cause Logged"
           value={`${current.rcaCoveragePct}%`}
@@ -190,15 +214,19 @@ export default function WeeklyPage() {
           <SectionTitle>What Moved This Week</SectionTitle>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
             {digest.categoryMovements.map(m => (
-              <div key={m.name} className="v1-card p-4">
-                <div className="flex items-start justify-between gap-2 mb-1.5">
-                  <div className="text-[13px] text-card-foreground font-medium leading-snug">{m.name}</div>
-                  <DeltaChip value={m.deltaPct} invert />
+              <div key={m.name} className="v1-card p-4" data-testid="movement">
+                <div className="text-[13px] text-card-foreground font-medium leading-snug mb-1.5">{m.name}</div>
+                <div className="font-mono text-[24px] font-bold text-card-foreground leading-none">
+                  {m.count} <span className="text-[12px] font-normal text-card-foreground/60">{m.count === 1 ? 'incident' : 'incidents'}</span>
                 </div>
-                <div className="font-mono text-[24px] font-bold text-card-foreground leading-none">{m.count}</div>
-                <div className="text-[11px] text-card-foreground/50 mt-1.5">
-                  vs {m.baseline} typical per week
-                </div>
+                {m.typical === 0 ? (
+                  <div className="font-mono text-[12px] text-card-foreground mt-1.5">{WEEKLY_COPY.newThisPeriod}</div>
+                ) : (
+                  <div className="flex flex-wrap items-baseline gap-x-2 mt-1.5">
+                    <span className="font-mono text-[12px] text-card-foreground">{formatChange(m.change)} vs typical {typicalText(m.typical)}</span>
+                    <span className="font-mono text-[10px] text-card-foreground/45">{m.deltaPct > 0 ? '+' : ''}{m.deltaPct}%</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -206,8 +234,8 @@ export default function WeeklyPage() {
       )}
 
       <SectionTitle>Volume & Quality Trend</SectionTitle>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div className="v1-card p-5">
+      <div className="grid grid-cols-1 gap-4 mb-6">
+        <div className="v1-card p-5 min-w-0">
           <div className="font-mono text-[11px] font-bold uppercase tracking-wider text-card-foreground/50 mb-4">
             Incidents per Week
           </div>
@@ -220,6 +248,14 @@ export default function WeeklyPage() {
               <Bar dataKey="count" name="Incidents" fill="hsl(209,96%,35%)" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          <WeeklyComposition
+            incidents={incidents}
+            scores={scores}
+            weeks={compositionWeeks}
+            selectedWeek={selectedWeek}
+            baselineWeeks={compositionBaseline}
+            availability={dimensionAvailability}
+          />
         </div>
 
         <div className="v1-card p-5">

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  headline, lookDimension, medianResolutionHours, patternBreadth, periodSpan, slaSignal, topShare,
+  headline, lookDimension, medianResolutionHours, patternBreadth, periodSpan, topShare,
 } from './executiveSummary';
+import { slaSignal } from './slaSignal';
 import { dimensionTable } from './serviceDimension';
 
 const inc = (over: { ag?: string; s?: string; o?: string; cluster?: string; opened?: string } = {}) => ({
