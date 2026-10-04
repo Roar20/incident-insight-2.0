@@ -9,12 +9,14 @@ import TrendsPage from '@/pages/TrendsPage';
 import WeeklyPage from '@/pages/WeeklyPage';
 import ProblemsPage from '@/pages/ProblemsPage';
 import OrigenPage from '@/pages/OrigenPage';
+import ExecutiveSummaryPage from '@/pages/ExecutiveSummaryPage';
 
 export default function Dashboard() {
   const { currentPage } = useAppContext();
 
   const renderPage = () => {
     switch (currentPage) {
+      case 'executive': return <ExecutiveSummaryPage />;
       case 'overview': return <OverviewPage />;
       case 'weekly': return <WeeklyPage />;
       case 'problems': return <ProblemsPage />;

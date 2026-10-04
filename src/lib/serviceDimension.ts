@@ -48,7 +48,7 @@ function distinctKnown(set: Set<string | null>): number {
 }
 
 // ---------------------------------------------------------------------------
-// One dimension: Service or Service offering
+// One dimension: Service, Service offering or Assignment group
 // ---------------------------------------------------------------------------
 
 export interface DimensionRow {
@@ -84,7 +84,7 @@ export interface DimensionTable {
  */
 export function dimensionTable(
   incidents: OrigenIncident[],
-  dimension: 'service' | 'serviceOffering',
+  dimension: OrigenDimension,
   candidateIds: ReadonlySet<string>,
 ): DimensionTable {
   interface Acc { incidents: number; ags: Set<string | null>; services: Set<string | null>; offerings: Set<string | null>; clusters: Set<string> }
