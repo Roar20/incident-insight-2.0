@@ -15,6 +15,7 @@ import { dataThrough } from '../weeklyComposition';
 import {
   calendarWeeks, concentration, concentrationLead, displayText, factLine, groupCards, groupIdentity, groupName, groupTexts,
   isWeekComparable, shortDate, sparklineHeights, topShare, utcDateKey, weekEndDate, weekMonthLabel, weekOptionText, weekRangeText, weekSummary,
+  distribution, largestRemainderPct, lastCoveredLine, lastSeenText, qualityView, settingSummary, termVectors,
 } from './presentation';
 
 function load(file: string): AnnotatedIncident[] {
@@ -335,5 +336,128 @@ describe('weeks', () => {
   it('labels the ISO week range and fills calendar gaps across a year boundary', () => {
     expect(weekRangeText('2026-W40')).toBe('Sep 28 – Oct 4');
     expect(calendarWeeks(['2025-W51', '2026-W02'])).toEqual(['2025-W51', '2025-W52', '2026-W01', '2026-W02']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FAM-01.3
+// ---------------------------------------------------------------------------
+
+describe('largest-remainder percentages', () => {
+  it('always sum to 100, including the half-point cases', () => {
+    expect(largestRemainderPct([3, 37])).toEqual([8, 92]); // 7.5 / 92.5
+    expect(largestRemainderPct([3, 5])).toEqual([38, 62]); // 37.5 / 62.5
+    expect(largestRemainderPct([1, 1, 1])).toEqual([34, 33, 33]);
+    expect(largestRemainderPct([0, 0])).toEqual([0, 0]);
+    expect(largestRemainderPct([5, 0])).toEqual([100, 0]);
+    for (let seed = 1; seed < 200; seed++) {
+      const counts = permute(new Array(1 + (seed % 6)).fill(0), seed).map(i => (i * seed * 7919) % 97);
+      const pcts = largestRemainderPct(counts);
+      if (counts.some(c => c > 0)) expect(pcts.reduce((a, b) => a + b, 0)).toBe(100);
+    }
+  });
+});
+
+describe('distribution bar', () => {
+  const sap = load('syn_sap.csv');
+  const sapTexts = sap.map(i => openTimeText(i.shortDescClean, i.descClean));
+  const sapParts = computeFamilyPartitions({ texts: sapTexts, variant: 'R1', tau: 0.05 });
+  const sapLabels = sapParts.labels[sapParts.thresholds.indexOf(FAMILIES_DISPLAY.strictness.broader)];
+
+  it('counts reconcile exactly with the population and percentages sum to 100', () => {
+    for (const view of [sap, sap.slice(0, 900), sap.filter(i => i.Opened.slice(0, 7) === '2026-02')]) {
+      const segs = distribution(sap, view, sapLabels);
+      expect(segs.reduce((a, s) => a + s.incidents, 0)).toBe(view.length);
+      expect(segs.reduce((a, s) => a + s.pct, 0)).toBe(100);
+      const summary = settingSummary(sap, view, sapLabels);
+      expect(segs.find(s => s.key === 'oneOff')?.incidents ?? 0).toBe(summary.oneOff);
+      expect(segs.reduce((a, s) => a + s.groups, 0)).toBe(summary.groups);
+    }
+    const segs = distribution(sap, sap, sapLabels);
+    expect(segs.map(s => s.key)).toEqual(['top', 'next', 'remaining', 'oneOff']);
+    expect(segs.map(s => s.label)).toEqual(['Top 5 groups', 'Next 20 groups', `Remaining ${segs[2].groups} groups`, 'One-off']);
+  });
+
+  it('leaves out empty segments when there are fewer than 25 groups', () => {
+    const mk = (sizes: number[], singles: number) => {
+      const ls: number[] = [];
+      sizes.forEach((n, g) => { for (let k = 0; k < n; k++) ls.push(g); });
+      for (let k = 0; k < singles; k++) ls.push(-1);
+      const rows = ls.map((_, i) => ({ ...incidents[0], Number: `X${i}` }));
+      return { rows, labels: Int32Array.from(ls) };
+    };
+    const three = mk([4, 3, 2], 5);
+    const segs3 = distribution(three.rows, three.rows, three.labels);
+    expect(segs3.map(s => [s.key, s.label, s.incidents])).toEqual([['top', 'All 3 groups', 9], ['oneOff', 'One-off', 5]]);
+    expect(segs3.reduce((a, s) => a + s.pct, 0)).toBe(100);
+    const twelve = mk(new Array(12).fill(2), 0);
+    const segs12 = distribution(twelve.rows, twelve.rows, twelve.labels);
+    expect(segs12.map(s => [s.key, s.label, s.groups])).toEqual([['top', 'Top 5 groups', 5], ['next', 'Next 7 groups', 7]]);
+    expect(segs12.reduce((a, s) => a + s.pct, 0)).toBe(100);
+    expect(distribution(twelve.rows, [], twelve.labels)).toEqual([]);
+  });
+});
+
+describe('Quality filter view', () => {
+  const scores = incidents.map((inc, i) => ({ number: inc.Number, label: ['Excellent', 'Good', 'Poor', 'Critical'][i % 4] }));
+
+  it('narrows the displayed population only: group membership and IDs never change', () => {
+    const view = qualityView(incidents, scores, incidents, 'Good');
+    expect(view.length).toBe(incidents.filter((_, i) => i % 4 === 1).length);
+    expect(qualityView(incidents, scores, incidents, 'all')).toBe(incidents);
+    // Composes with the other filters.
+    const months = filterIncidents(incidents, { months: ['2026-01'], services: ALL_VALUES, serviceOfferings: ALL_VALUES });
+    expect(qualityView(incidents, scores, months, 'Good').every(i => months.includes(i) && view.includes(i))).toBe(true);
+    // Scores out of row order fall back to the incident number.
+    expect(qualityView(incidents, [...scores].reverse(), incidents, 'Good')).toEqual(view);
+    const identity = groupIdentity(incidents, labels);
+    const ctx = { incidents, labels, identity, texts: groupTexts(incidents, docs, labels), weeksWithData: weeks, selectedWeek: weeks[weeks.length - 3], dataThroughDate: utcDateKey(dataThrough(incidents)!) };
+    const full = new Map(groupCards({ ...ctx, view: incidents }).map(c => [c.label, c]));
+    for (const c of groupCards({ ...ctx, view })) {
+      expect(c.id).toBe(full.get(c.label)!.id);
+      expect(c.name).toEqual(full.get(c.label)!.name);
+      expect(c.total).toBeLessThanOrEqual(full.get(c.label)!.total);
+    }
+  });
+});
+
+describe('card week lines and last seen', () => {
+  const throughDate = utcDateKey(dataThrough(incidents)!);
+  const identity = groupIdentity(incidents, labels);
+  const gt = groupTexts(incidents, docs, labels);
+  const base = { incidents, labels, identity, texts: gt, weeksWithData: weeks, dataThroughDate: throughDate };
+
+  it('a fully covered week has no "last fully covered week" line', () => {
+    for (const c of groupCards({ ...base, view: incidents, selectedWeek: weeks[weeks.length - 3] })) expect(c.lastCovered).toBeNull();
+  });
+
+  it('a week the data does not fully cover adds the last fully covered week, compared with typical', () => {
+    const last = weeks[weeks.length - 1];
+    expect(isWeekComparable(last, throughDate)).toBe(false);
+    const prev = weeks[weeks.length - 2];
+    const cards = groupCards({ ...base, view: incidents, selectedWeek: last });
+    const reference = new Map(groupCards({ ...base, view: incidents, selectedWeek: prev }).map(c => [c.label, c]));
+    for (const c of cards) {
+      expect(c.typical).toBeNull();
+      expect(c.lastCovered!.week).toBe(prev);
+      const r = reference.get(c.label)!;
+      expect([c.lastCovered!.count, c.lastCovered!.typical, c.lastCovered!.change]).toEqual([r.count, r.typical, r.change]);
+      expect(lastCoveredLine(c.lastCovered!)).toBe(`Last fully covered week (${weekRangeText(prev)}): ${factLine(r, throughDate).replace(/ this week/, '')}`);
+    }
+  });
+
+  it('Last seen is the latest Opened among the group\'s incidents in the filtered population', () => {
+    const view = incidents.filter(i => i.Opened.slice(0, 7) <= '2026-02');
+    const rowOf = new Map(incidents.map((inc, i) => [inc, i]));
+    for (const c of groupCards({ ...base, view, selectedWeek: weeks[weeks.length - 3] })) {
+      const expected = view.filter(i => labels[rowOf.get(i)!] === c.label).map(i => i.Opened).sort().pop()!.slice(0, 10);
+      expect(c.lastSeen).toBe(expected);
+      expect(c.lastSeen <= '2026-02-28').toBe(true);
+      expect(lastSeenText(c.lastSeen)).toBe(`Last seen ${shortDate(expected)}`);
+    }
+  });
+
+  it('precomputed vectors give the same names and common words', () => {
+    expect(groupTexts(incidents, docs, labels, termVectors(docs))).toEqual(gt);
   });
 });

@@ -81,3 +81,41 @@ experimental view" and computes nothing.
 - **Known consistency item for a future WEEKLY-02 review (not changed here):**
   Weekly Review compares the Data-through week with its typical baseline even
   when the data ends before that week's Sunday.
+
+## FAM-01.3 — UX cleanup from FAM-DIAG-01 (no analytical changes)
+
+FAM-DIAG-01 found no analytical defect; the strictness change was real but
+easy to miss, and "Show all" mounted every group at once.
+
+- **Grouping controls above the group list**: strictness and text cleaning in
+  one row. The explanatory notes, template frequency level and the similarity
+  explorer sit in a collapsed "For analysts" section.
+- **Live result line** from the current result and filters:
+  "Balanced: 65 groups · 95% one-off". After a change it adds the previous
+  setting of this session, recomputed for the current filters, e.g.
+  "(Balanced: 65 · 95%)"; after a text-cleaning change it reads "(Before: …)".
+- **Busy feedback**: a strictness click updates the selector at once and the
+  groups follow in a deferred render ("Updating groups…"). A text-cleaning
+  change keeps the last result on screen (dimmed) until the new one arrives.
+  Answers to superseded requests are ignored (tested).
+- **Group numbers** are secondary text with the tooltip "Group number within
+  the current grouping setting".
+- **Distribution bar** "Where repeating demand sits": top 5 groups · next 20 ·
+  remaining groups · one-off, over the displayed population. Counts reconcile
+  exactly; percentages use the largest-remainder method and sum to 100. Empty
+  segments are left out. A non-empty segment can show 0% when it is under one
+  point (tooltips give the counts).
+- **KPI percentages** use the same largest-remainder method (no more 101%).
+- **Cards**: 6 at first, "Show 6 more groups" adds 6 (never all at once).
+  Order: example name → up to 3 common words → week line → "Last seen" →
+  sparkline → handled by / main service → totals. A week the data does not
+  fully cover adds "Last fully covered week (<range>): n · typical t · ±Δ".
+- **One-off incidents**: one collapsed line; when opened, 20 at a time. A
+  group's incident list pages the same way.
+- **Quality filter** (sidebar) now narrows this page's displayed population,
+  like Month / Service / Offering. It never reaches grouping.
+- **Typography**: sans-serif throughout the page, sentence-case section
+  titles, no duplicated "Week of" line. The shared filter bar and sidebar are
+  unchanged (other pages use them).
+- Display performance: the term vectors used for names and common words are
+  computed once per text cleaning instead of once per strictness change.

@@ -35,14 +35,21 @@ export const FAMILIES_DISPLAY = {
    * values. A starting point, not a recommended setting.
    */
   strictness: { broader: 0.6, balanced: 0.7, stricter: 0.8 },
-  /** Group cards shown before "Show all". */
-  topCards: 10,
+  /** Group cards shown first, and added by each "Show 6 more groups" (never all at once). */
+  topCards: 6,
+  /** One-off incidents (and a group's incidents) listed per "Show 20 more". */
+  incidentPage: 20,
   /** Characters of the example incident shown as the group name. */
   nameMaxChars: 60,
   /** Common words shown in a group's detail. */
   commonWords: 5,
+  /** Common words shown on a card (the first of the detail's words). */
+  cardWords: 3,
   /** Groups counted in the concentration line. */
   concentrationTop: 5,
+  /** Distribution bar: the largest groups, then the next ones; the rest are "remaining". */
+  distributionTop: 5,
+  distributionNext: 20,
   /** Sparkline height and the minimum drawn height of a non-zero week (pixels, drawing only). */
   sparklineHeight: 28,
   sparklineMinBar: 3,

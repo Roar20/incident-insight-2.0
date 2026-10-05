@@ -89,6 +89,22 @@ export function typicalText(typical: number): string {
 export const formatCount = (n: number) => n.toLocaleString('en-US');
 export const wholePct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
+/**
+ * Whole percentages of `counts` that always sum to 100 (largest-remainder
+ * method): floors first, then the leftover points go to the largest
+ * remainders, ties to the earlier position. All zeros when the total is 0.
+ */
+export function largestRemainderPct(counts: number[]): number[] {
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (total <= 0) return counts.map(() => 0);
+  const exact = counts.map(c => (c * 100) / total);
+  const out = exact.map(Math.floor);
+  let left = 100 - out.reduce((a, b) => a + b, 0);
+  const order = exact.map((x, i) => ({ r: x - Math.floor(x), i })).sort((a, b) => b.r - a.r || a.i - b.i);
+  for (let k = 0; left > 0; k = (k + 1) % order.length, left--) out[order[k].i]++;
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Group identity: G01, G02… by total size, then canonical order
 // ---------------------------------------------------------------------------
@@ -190,8 +206,7 @@ export interface GroupText {
  * members (ties → earliest Opened, then canonical member order), and the
  * group's most characteristic words.
  */
-export function groupTexts(incidents: Incident[], docs: string[], labels: Int32Array): Map<number, GroupText> {
-  const vectors = termVectors(docs);
+export function groupTexts(incidents: Incident[], docs: string[], labels: Int32Array, vectors = termVectors(docs)): Map<number, GroupText> {
   const memberKey = (i: number) => `${incidents[i].Number.trim()}\u0000${incidents[i].shortDescClean}\u0000${incidents[i].descClean}\u0000${incidents[i].Opened}`;
   const members = new Map<number, number[]>();
   labels.forEach((l, i) => {
@@ -321,6 +336,23 @@ export interface GroupCard {
   /** Distinct weeks with incidents of the group (active filtered population). */
   weeksAppeared: number;
   totalWeeks: number;
+  /** Latest Opened among the group's incidents in the active filtered population, "YYYY-MM-DD" ('' when none is dated). */
+  lastSeen: string;
+  /**
+   * When the selected week is not fully covered: the same comparison for the
+   * latest fully covered week before it (null otherwise, or when there is none).
+   */
+  lastCovered: WeekComparison | null;
+}
+
+/** One week's count compared with typical (Weekly Review's baseline weeks). */
+export interface WeekComparison {
+  week: string;
+  count: number;
+  typical: number | null;
+  change: number | null;
+  pct: number | null;
+  newThisPeriod: boolean;
 }
 
 export interface GroupContext {
@@ -355,34 +387,51 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
     else all.set(l, [i]);
   });
   const viewWeekly = new Map<number, number[]>();
+  const lastSeen = new Map<number, string>();
   for (const inc of view) {
     const l = labels[rowOf.get(inc)!];
     if (l < 0 || !col.has(inc.week)) continue;
     let series = viewWeekly.get(l);
     if (!series) viewWeekly.set(l, (series = new Array(calendar.length).fill(0)));
     series[col.get(inc.week)!]++;
+    if (inc.Opened && inc.Opened > (lastSeen.get(l) ?? '')) lastSeen.set(l, inc.Opened);
   }
   const comparable = isWeekComparable(selectedWeek, dataThroughDate);
-  const baseline = baselineWeeksFor(weeksWithData, selectedWeek);
+  const compare = (series: number[], week: string): WeekComparison => {
+    const baseline = baselineWeeksFor(weeksWithData, week);
+    const count = col.has(week) ? series[col.get(week)!] : 0;
+    const typical = baseline.length ? baseline.reduce((s, w) => s + series[col.get(w)!], 0) / baseline.length : null;
+    const change = typical === null ? null : count - typical;
+    return {
+      week, count, typical, change,
+      pct: typical !== null && typical > 0 ? Math.round((change! / typical) * 100) : null,
+      newThisPeriod: typical === 0 && count > 0,
+    };
+  };
+  // The latest fully covered week with data before the selected one (Weekly Review's week list).
+  const lastCoveredWeek = comparable ? undefined
+    : [...weeksWithData].reverse().find(w => w < selectedWeek && isWeekComparable(w, dataThroughDate));
   const cards: GroupCard[] = [];
   for (const [label, series] of viewWeekly) {
-    const count = col.has(selectedWeek) ? series[col.get(selectedWeek)!] : 0;
     const members = all.get(label)!;
-    const typical = comparable && baseline.length ? baseline.reduce((s, w) => s + series[col.get(w)!], 0) / baseline.length : null;
-    const change = typical === null ? null : count - typical;
+    const selected = compare(series, selectedWeek);
+    const typical = comparable ? selected.typical : null;
     cards.push({
       label,
       id: identity.ids.get(label)!,
       name: groupName(incidents[texts.get(label)!.representative]),
       total: series.reduce((a, b) => a + b, 0),
-      count, comparable, typical, change,
-      pct: typical !== null && typical > 0 ? Math.round((change! / typical) * 100) : null,
-      newThisPeriod: typical === 0 && count > 0,
+      count: selected.count, comparable, typical,
+      change: comparable ? selected.change : null,
+      pct: comparable ? selected.pct : null,
+      newThisPeriod: comparable && selected.newThisPeriod,
       sparkline: series,
       handledBy: topShare(members.map(i => dimensionValue(incidents[i], 'assignmentGroup'))),
       service: topShare(members.map(i => dimensionValue(incidents[i], 'service'))),
       weeksAppeared: series.filter(v => v > 0).length,
       totalWeeks: calendar.length,
+      lastSeen: (lastSeen.get(label) ?? '').slice(0, 10),
+      lastCovered: lastCoveredWeek ? compare(series, lastCoveredWeek) : null,
     });
   }
   const canonical = (a: GroupCard, b: GroupCard) => identity.rank.get(a.label)! - identity.rank.get(b.label)!;
@@ -398,12 +447,113 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
  */
 export function factLine(card: Pick<GroupCard, 'count' | 'typical' | 'change' | 'newThisPeriod' | 'comparable'>, dataThroughDate = ''): string {
   if (!card.comparable) return `${formatCount(card.count)} ${card.count === 1 ? 'incident' : 'incidents'} through ${shortDate(dataThroughDate)}`;
-  const head = `${formatCount(card.count)} this week`;
-  if (card.newThisPeriod) return `${head} · New this period`;
-  if (card.typical === null) return `${head} · no earlier weeks to compare`;
-  const rounded = Math.round(card.change! * 10) / 10;
+  return `${formatCount(card.count)} this week · ${comparisonText(card)}`;
+}
+
+/** "typical 9 · +5", "New this period" or "no earlier weeks to compare". */
+function comparisonText(c: Pick<WeekComparison, 'typical' | 'change' | 'newThisPeriod'>): string {
+  if (c.newThisPeriod) return 'New this period';
+  if (c.typical === null) return 'no earlier weeks to compare';
+  const rounded = Math.round(c.change! * 10) / 10;
   const delta = rounded === 0 ? '±0' : `${rounded > 0 ? '+' : '−'}${typicalText(Math.abs(rounded))}`;
-  return `${head} · typical ${typicalText(card.typical)} · ${delta}`;
+  return `typical ${typicalText(c.typical)} · ${delta}`;
+}
+
+/** "Last fully covered week (Sep 22 – Sep 28): 4 · typical 3 · +1". */
+export function lastCoveredLine(c: WeekComparison): string {
+  return `Last fully covered week (${weekRangeText(c.week)}): ${formatCount(c.count)} · ${comparisonText(c)}`;
+}
+
+/** "Last seen Sep 30" ('' when no member in view is dated). */
+export function lastSeenText(lastSeen: string): string {
+  return lastSeen ? `Last seen ${shortDate(lastSeen)}` : '';
+}
+
+// ---------------------------------------------------------------------------
+// Population views: Quality filter, setting summary, distribution
+// ---------------------------------------------------------------------------
+
+type QualityScore = { number: string; label: string };
+
+/**
+ * The active filtered population narrowed by the sidebar Quality filter.
+ * Display only: like Month / Service / Offering it never reaches grouping.
+ * Scores are row-aligned with the loaded incidents; when they are not, they
+ * are matched by incident number.
+ */
+export function qualityView<T extends Incident>(incidents: T[], scores: QualityScore[], view: T[], quality: string): T[] {
+  if (quality === 'all') return view;
+  const aligned = scores.length === incidents.length && incidents.every((inc, i) => scores[i].number === inc.Number);
+  if (aligned) {
+    const keep = new Set<T>();
+    incidents.forEach((inc, i) => { if (scores[i].label === quality) keep.add(inc); });
+    return view.filter(inc => keep.has(inc));
+  }
+  const byNumber = new Map(scores.map(s => [s.number, s.label]));
+  return view.filter(inc => byNumber.get(inc.Number) === quality);
+}
+
+export interface SettingSummary {
+  /** Groups with at least one incident in the population. */
+  groups: number;
+  oneOff: number;
+  population: number;
+}
+
+/** Groups and one-off incidents of a population under one grouping setting's labels. */
+export function settingSummary(incidents: Incident[], view: Incident[], labels: Int32Array): SettingSummary {
+  const rowOf = new Map<Incident, number>();
+  incidents.forEach((inc, i) => rowOf.set(inc, i));
+  const groups = new Set<number>();
+  let oneOff = 0;
+  for (const inc of view) {
+    const l = labels[rowOf.get(inc)!];
+    if (l < 0) oneOff++;
+    else groups.add(l);
+  }
+  return { groups: groups.size, oneOff, population: view.length };
+}
+
+export interface DistributionSegment {
+  key: 'top' | 'next' | 'remaining' | 'oneOff';
+  label: string;
+  /** Groups in the segment (0 for one-off incidents). */
+  groups: number;
+  incidents: number;
+  /** Largest-remainder whole percent; the segments sum to 100. */
+  pct: number;
+}
+
+/**
+ * Where the population's incidents sit: its 5 largest groups, the next 20,
+ * the remaining groups and the one-off incidents. Counts reconcile exactly
+ * with the population; empty segments are left out (fewer than 25 groups).
+ */
+export function distribution(incidents: Incident[], view: Incident[], labels: Int32Array,
+  top = FAMILIES_DISPLAY.distributionTop, next = FAMILIES_DISPLAY.distributionNext): DistributionSegment[] {
+  const rowOf = new Map<Incident, number>();
+  incidents.forEach((inc, i) => rowOf.set(inc, i));
+  const sizes = new Map<number, number>();
+  let oneOff = 0;
+  for (const inc of view) {
+    const l = labels[rowOf.get(inc)!];
+    if (l < 0) oneOff++;
+    else sizes.set(l, (sizes.get(l) ?? 0) + 1);
+  }
+  const sorted = [...sizes.values()].sort((a, b) => b - a);
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  const topSizes = sorted.slice(0, top);
+  const nextSizes = sorted.slice(top, top + next);
+  const restSizes = sorted.slice(top + next);
+  const groupsText = (n: number) => `${n} ${n === 1 ? 'group' : 'groups'}`;
+  const segments = [
+    { key: 'top' as const, label: sorted.length <= top ? `All ${groupsText(sorted.length)}` : `Top ${top} groups`, groups: topSizes.length, incidents: sum(topSizes) },
+    { key: 'next' as const, label: nextSizes.length === next ? `Next ${next} groups` : `Next ${groupsText(nextSizes.length)}`, groups: nextSizes.length, incidents: sum(nextSizes) },
+    { key: 'remaining' as const, label: `Remaining ${groupsText(restSizes.length)}`, groups: restSizes.length, incidents: sum(restSizes) },
+    { key: 'oneOff' as const, label: 'One-off', groups: 0, incidents: oneOff },
+  ].filter(s => s.incidents > 0);
+  const pcts = largestRemainderPct(segments.map(s => s.incidents));
+  return segments.map((s, i) => ({ ...s, pct: pcts[i] }));
 }
 
 // ---------------------------------------------------------------------------
