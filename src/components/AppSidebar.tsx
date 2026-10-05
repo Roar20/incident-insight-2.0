@@ -1,5 +1,5 @@
 import { useAppContext } from '@/context/AppContext';
-import { familiesEnabled } from '@/config/families';
+import { FAMILIES_COPY, familiesEnabled } from '@/config/families';
 import { BarChart3, FileText, Users, Building2, LayoutDashboard, TrendingUp, CalendarRange, Search, Compass, Presentation, FlaskConical, type LucideIcon } from 'lucide-react';
 
 interface NavItem {
@@ -23,7 +23,7 @@ const pages: NavItem[] = [
 
 /** Experimental, flag-gated views (VITE_EXPERIMENTAL_FAMILIES=on). */
 const experimentalPages: NavItem[] = [
-  { id: 'families', label: 'Incident Families (experimental)', icon: FlaskConical },
+  { id: 'families', label: FAMILIES_COPY.title, icon: FlaskConical },
 ];
 
 const filterLabels = [

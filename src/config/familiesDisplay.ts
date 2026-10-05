@@ -24,4 +24,16 @@ export const FAMILIES_DISPLAY = {
    * the same three weeks production uses to call a problem chronic.
    */
   recurringMinWeeks: 3,
+  /**
+   * "How strict is the grouping?" → registered M1 thresholds. Balanced is the
+   * exploratory default; Broader and Stricter are the adjacent registered
+   * values. A starting point, not a recommended setting.
+   */
+  strictness: { broader: 0.6, balanced: 0.7, stricter: 0.8 },
+  /** Group cards shown before "Show all". */
+  topCards: 10,
+  /** Characters of the example incident shown as the group name. */
+  nameMaxChars: 60,
+  /** Common words shown in a group's detail. */
+  commonWords: 5,
 } as const;
