@@ -13,6 +13,7 @@ import {
   type OverviewStats, type DimStats, type FeedbackItem, type AgentStat, type GroupStat,
 } from '../lib/analytics';
 import { annotateIncidents, type AnnotatedIncident } from '../lib/problems';
+import { computeFamilyPartitions, type FamilyRequest } from '../lib/families/families';
 
 export interface WorkerRequest {
   buffer: ArrayBuffer;
@@ -35,6 +36,18 @@ export interface WorkerResult {
   /** Signs of damaged file structure that did not stop the load. */
   warnings: string[];
 }
+
+/**
+ * Experimental Incident Families (FAM-01): a separate request kind, sent only
+ * by the flag-gated Incident Families page. It never touches ingestion.
+ */
+export interface FamiliesWorkerRequest extends FamilyRequest {
+  kind: 'families';
+}
+
+export type FamiliesWorkerMessage =
+  | { type: 'families'; payload: { variant: FamilyRequest['variant']; tau: number | null; thresholds: number[]; labels: Int32Array[]; elapsedMs: number } }
+  | { type: 'families-error'; payload: string };
 
 export type WorkerMessage =
   | { type: 'progress'; percent: number; processed: number; total: number }
@@ -59,8 +72,24 @@ function post(message: WorkerMessage): void {
   self.postMessage(message);
 }
 
-self.onmessage = async function (e: MessageEvent<WorkerRequest>) {
-  const { buffer, name } = e.data;
+function runFamilies(request: FamiliesWorkerRequest): void {
+  try {
+    const started = performance.now();
+    const result = computeFamilyPartitions(request);
+    const message: FamiliesWorkerMessage = { type: 'families', payload: { ...result, elapsedMs: performance.now() - started } };
+    self.postMessage(message, { transfer: result.labels.map(l => l.buffer) });
+  } catch (err) {
+    const message: FamiliesWorkerMessage = { type: 'families-error', payload: err instanceof Error ? err.message : String(err) };
+    self.postMessage(message);
+  }
+}
+
+self.onmessage = async function (e: MessageEvent<WorkerRequest | FamiliesWorkerRequest>) {
+  if ('kind' in e.data && e.data.kind === 'families') {
+    runFamilies(e.data);
+    return;
+  }
+  const { buffer, name } = e.data as WorkerRequest;
 
   try {
     post({ type: 'progress', percent: 5, processed: 0, total: 0 });
