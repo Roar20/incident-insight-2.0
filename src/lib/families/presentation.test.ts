@@ -4,17 +4,18 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { enrichRow, inferDateOrder, readIncidentTable } from '../parser';
 import { annotateIncidents, type AnnotatedIncident } from '../problems';
-import { availableWeeks } from '../weekly';
+import { availableWeeks, baselineWeeksFor } from '../weekly';
 import { ALL_VALUES, filterIncidents } from '../problemView';
 import { FAMILIES_RESEARCH } from '../../config/familiesResearch';
 import { FAMILIES_DISPLAY } from '../../config/familiesDisplay';
 import { computeFamilyPartitions } from './families';
 import { canonicalLabels } from './m1';
-import { buildVariant, openTimeText } from './variants';
+import { applyTemplates, buildVariant, fitTemplates, openTimeText } from './variants';
 import { dataThrough } from '../weeklyComposition';
 import {
   calendarWeeks, concentration, concentrationLead, displayText, factLine, groupCards, groupIdentity, groupName, groupTexts,
   isWeekComparable, shortDate, sparklineHeights, topShare, utcDateKey, weekEndDate, weekMonthLabel, weekOptionText, weekRangeText, weekSummary,
+  averageLabel, breakdownRows, cleanedGroupName, cleanedLines, composition, groupActivity, monthTicks, periodLabel, periodWeeks, shareLabel,
   distribution, largestRemainderPct, lastCoveredLine, lastSeenText, qualityView, settingSummary, termVectors,
 } from './presentation';
 
@@ -168,7 +169,11 @@ describe('group cards', () => {
         }
         if (c.typical !== null && c.typical > 0) {
           expect(c.pct).toBe(Math.round(((c.count - c.typical) / c.typical) * 100));
-          expect(factLine(c, throughDate)).toMatch(/· typical [\d.]+ · [+−±]/);
+          expect(factLine(c, throughDate)).toMatch(new RegExp(`· ${averageLabel(c.baselineWeeks)} [\\d.]+ · [+−±]`));
+          // "typical" is the mean of the group's weekly counts over the up-to-4 weeks with data just before the week.
+          const base4 = baselineWeeksFor(weeks, week);
+          expect(c.baselineWeeks).toBe(base4.length);
+          expect(c.typical).toBeCloseTo(base4.reduce((a, w) => a + c.sparkline[calendar.indexOf(w)], 0) / base4.length, 12);
           checkedDelta = true;
         }
       }
@@ -188,7 +193,7 @@ describe('group cards', () => {
       expect(c.newThisPeriod).toBe(false);
       const line = factLine(c, throughDate);
       expect(line).toBe(`${c.count} ${c.count === 1 ? 'incident' : 'incidents'} through ${shortDate(throughDate)}`);
-      expect(line).not.toMatch(/typical|New this period|[+−±]/);
+      expect(line).not.toMatch(/typical|average|New this period|[+−±]/);
     }
   });
 
@@ -199,10 +204,12 @@ describe('group cards', () => {
   });
 
   it('fact line: typical with one decimal only when needed, neutral delta', () => {
-    const f = (count: number, typical: number) => factLine({ count, typical, change: count - typical, newThisPeriod: false, comparable: true });
-    expect(f(14, 9)).toBe('14 this week · typical 9 · +5');
-    expect(f(2, 2.4)).toBe('2 this week · typical 2.4 · −0.4');
-    expect(f(3, 3)).toBe('3 this week · typical 3 · ±0');
+    const f = (count: number, typical: number, baselineWeeks = 4) => factLine({ count, typical, change: count - typical, newThisPeriod: false, comparable: true, baselineWeeks });
+    expect(f(14, 9)).toBe('14 this week · previous 4-week average 9 · +5');
+    expect(f(2, 2.4)).toBe('2 this week · previous 4-week average 2.4 · −0.4');
+    expect(f(3, 3)).toBe('3 this week · previous 4-week average 3 · ±0');
+    expect(f(3, 1, 2)).toBe('3 this week · previous 2-week average 1 · +2');
+    expect(f(3, 1, 1)).toBe('3 this week · previous week 1 · +2');
   });
 });
 
@@ -459,5 +466,120 @@ describe('card week lines and last seen', () => {
 
   it('precomputed vectors give the same names and common words', () => {
     expect(groupTexts(incidents, docs, labels, termVectors(docs))).toEqual(gt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FAM-01.4
+// ---------------------------------------------------------------------------
+
+describe('readable names from the active text cleaning (display only)', () => {
+  const sap = load('syn_sap.csv');
+  const sapTexts = sap.map(i => openTimeText(i.shortDescClean, i.descClean));
+
+  it('cleaned lines, joined, are exactly the cleaned text the groups were built from', () => {
+    for (const tau of FAMILIES_RESEARCH.taus) {
+      const templates = fitTemplates(sapTexts, tau);
+      for (let i = 0; i < sap.length; i++) {
+        const r1 = cleanedLines(sapTexts[i], templates, 'R1').flat().join(' ');
+        expect(r1).toBe(applyTemplates(sapTexts[i], templates));
+        expect(r1.toLowerCase().replace(/\s+/g, ' ').trim()).toBe(buildVariantRow(sapTexts, i, 'R1', tau));
+      }
+    }
+  });
+
+  it('R1 names come from the first cleaned line with at least 3 words; never a removed template line', () => {
+    const tau = 0.05;
+    const templates = fitTemplates(sapTexts, tau);
+    let differs = 0;
+    for (const inc of sap) {
+      const name = cleanedGroupName(inc, templates, 'R1');
+      const raw = groupName(inc);
+      if (!name) continue;
+      expect(name.full).toBe(raw.full); // the tooltip keeps the original text
+      const shown = name.short.replace(/^Example: /, '').replace(/…$/, '');
+      expect(shown.length).toBeLessThanOrEqual(FAMILIES_DISPLAY.cleanedNameMaxChars);
+      expect(shown.split(' ').filter(w => /\p{L}/u.test(w)).length).toBeGreaterThanOrEqual(Math.min(3, shown.split(' ').length));
+      expect(shown).not.toMatch(/_|\.{2,}/);
+      if (name.short !== raw.short) differs++;
+    }
+    // The fictional file has template first lines, so cleaned names differ for some incidents.
+    expect(differs).toBeGreaterThan(0);
+    // R2 additionally drops identifier tokens.
+    for (const inc of sap.slice(0, 300)) {
+      const r2 = cleanedGroupName(inc, templates, 'R2');
+      if (r2) for (const w of r2.short.replace(/^Example: /, '').replace(/…$/, '').split(' ')) expect(/^[0-9a-fA-F]{8,}$/.test(w) && /\d/.test(w) && /[a-fA-F]/.test(w)).toBe(false);
+    }
+  });
+
+  it('falls back (null) when no cleaned line has 3 words', () => {
+    const templates = { lines: new Set<string>(), grams: new Set<string>() };
+    expect(cleanedGroupName({ shortDescClean: 'Disk full', descClean: 'on X' }, templates, 'R1')).toBeNull();
+    expect(cleanedGroupName({ shortDescClean: 'Disk__full on.....node now', descClean: '' }, templates, 'R1')!.short).toBe('Example: Disk full on node now');
+  });
+});
+
+function buildVariantRow(texts: string[], i: number, variant: 'R1', tau: number): string {
+  return (cache.get(tau) ?? cache.set(tau, buildVariant(texts, { variant, tau })).get(tau)!)[i];
+}
+const cache = new Map<number, string[]>();
+
+describe('selected period and shares', () => {
+  it('period label from the month filter or the file range', () => {
+    expect(periodLabel(['2026-09'], '', '')).toBe('Sep 2026');
+    expect(periodLabel(['2026-07', '2026-09', '2026-08'], '', '')).toBe('Jul – Sep 2026');
+    expect(periodLabel(['2025-11', '2025-12', '2026-01'], '', '')).toBe('Nov 2025 – Jan 2026');
+    expect(periodLabel(['2026-01', '2026-03'], '', '')).toBe('Jan, Mar 2026');
+    expect(periodLabel([], '2026-01-01', '2026-10-01')).toBe('Jan 1 – Oct 1, 2026');
+    expect(periodLabel([], '2025-12-30', '2026-10-01')).toBe('Dec 30, 2025 – Oct 1, 2026');
+  });
+
+  it('period weeks: every calendar week with a day in a selected month', () => {
+    const calendar = calendarWeeks(weeks);
+    expect(periodWeeks(calendar, [])).toEqual(calendar);
+    const sep = periodWeeks(calendar, ['2026-09']);
+    for (const inc of incidents.filter(i => i.Opened.slice(0, 7) === '2026-09')) expect(sep).toContain(inc.week);
+    expect(sep.length).toBeGreaterThanOrEqual(4);
+    expect(sep.length).toBeLessThanOrEqual(6);
+  });
+
+  it('composition and split shares always add up', () => {
+    const c = composition({ groups: 3, oneOff: 37, population: 40 });
+    expect([c.repeating, c.oneOff, c.repeatingPct + c.oneOffPct]).toEqual([3, 37, 100]);
+    expect(largestRemainderPct([19, 50, 80], 6)).toEqual([1, 2, 3]);
+    expect(largestRemainderPct([19, 50, 80], 6).reduce((a, b) => a + b, 0)).toBe(6);
+    expect(shareLabel(0, 19)).toBe('<1%');
+    expect(shareLabel(0, 0)).toBe('0%');
+    expect(shareLabel(11, 300)).toBe('11%');
+  });
+});
+
+describe('group detail: one population', () => {
+  it('breakdown rows reconcile to the incidents counted, with an "Other" row', () => {
+    const values = ['a', 'b', 'b', null, 'c', 'd', 'e', 'f', 'g', 'g', 'g'];
+    const rows = breakdownRows(values);
+    expect(rows.reduce((a, r) => a + r.count, 0)).toBe(values.length);
+    expect(rows.reduce((a, r) => a + r.pct, 0)).toBe(100);
+    expect(rows[rows.length - 1].otherValues).toBe(3);
+    expect(breakdownRows(['x', 'x', null]).map(r => [r.value, r.count])).toEqual([['x', 2], [null, 1]]);
+  });
+
+  it('weekly activity: in-period counts sum to the dated members; outside weeks counted only as whole-file context', () => {
+    const calendar = calendarWeeks(weeks);
+    const label = labels[incidents.findIndex((_, i) => labels[i] >= 0)];
+    const fileMembers = incidents.filter((_, i) => labels[i] === label);
+    const months = ['2026-02', '2026-03'];
+    const members = fileMembers.filter(i => months.includes(i.Opened.slice(0, 7)));
+    const act = groupActivity(members, fileMembers, calendar, months);
+    expect(act).toHaveLength(calendar.length);
+    expect(act.filter(a => a.inPeriod).reduce((s, a) => s + a.count, 0)).toBe(members.length);
+    expect(act.filter(a => !a.inPeriod).every(a => a.count === 0)).toBe(true);
+    expect(act.reduce((s, a) => s + a.fileCount, 0)).toBe(fileMembers.length);
+  });
+
+  it('month ticks: one per month, year shown at the start and at a year change', () => {
+    const ticks = monthTicks(['2025-W52', '2026-W01', '2026-W02', '2026-W05', '2026-W06']);
+    expect(ticks.map(t => t.label)).toEqual(['Dec 2025', 'Jan 2026', 'Feb']);
+    expect(ticks.map(t => t.index)).toEqual([0, 1, 4]);
   });
 });

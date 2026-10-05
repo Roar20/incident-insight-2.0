@@ -9,10 +9,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { enrichRow, inferDateOrder, readIncidentTable } from '@/lib/parser';
 import { annotateIncidents, type AnnotatedIncident } from '@/lib/problems';
 import { availableWeeks } from '@/lib/weekly';
+import { ALL_VALUES, filterIncidents } from '@/lib/problemView';
+import { dimensionValue } from '@/lib/serviceDimension';
 import { computeFamilyPartitions } from '@/lib/families/families';
 import { FAMILIES_COPY, FAMILIES_DISPLAY } from '@/config/families';
 import { dataThrough, formatDataThrough } from '@/lib/weeklyComposition';
-import { distribution, settingSummary, shortDate, utcDateKey, weekRangeText } from '@/lib/families/presentation';
+import { composition, settingSummary, shortDate, utcDateKey, weekRangeText } from '@/lib/families/presentation';
 import { openTimeText } from '@/lib/families/variants';
 import { scoreIncident } from '@/lib/scorer';
 import FamiliesPage from './FamiliesPage';
@@ -61,12 +63,13 @@ const busyWeek = (() => {
   return weeks[weeks.length - 3];
 })();
 
-function contextFor(incidents: AnnotatedIncident[], selectedWeek?: string, filtered?: { view: AnnotatedIncident[]; months: string[] }, filterLabel = 'all') {
+type Selection = { values: string[]; includeMissing: boolean };
+function contextFor(incidents: AnnotatedIncident[], selectedWeek?: string, filtered?: { view: AnnotatedIncident[]; months: string[]; services?: Selection; serviceOfferings?: Selection }, filterLabel = 'all') {
   const weeks = availableWeeks(incidents);
   const scores = scoresOf.get(incidents) ?? incidents.map(scoreIncident);
   return {
     incidents, scores, filteredIncidents: filtered?.view ?? incidents, availableWeeks: weeks, selectedWeek: selectedWeek ?? weeks[weeks.length - 1], setSelectedWeek: vi.fn(),
-    globalFilters: { months: filtered?.months ?? [], services: { values: [], includeMissing: false }, serviceOfferings: { values: [], includeMissing: false } },
+    globalFilters: { months: filtered?.months ?? [], services: filtered?.services ?? { values: [], includeMissing: false }, serviceOfferings: filtered?.serviceOfferings ?? { values: [], includeMissing: false } },
     currentPage: 'overview', setCurrentPage: vi.fn(), filterLabel, setFilterLabel: vi.fn(), fileName: 'synthetic.csv',
   };
 }
@@ -78,9 +81,16 @@ function labelsOf(incidents: AnnotatedIncident[], strictness: keyof typeof FAMIL
 }
 function resultLine(incidents: AnnotatedIncident[], view: AnnotatedIncident[], labels: Int32Array) {
   const s = settingSummary(incidents, view, labels);
-  return { groups: s.groups, oneOff: distribution(incidents, view, labels).find(x => x.key === 'oneOff')?.pct ?? 0 };
+  return { groups: s.groups, oneOff: composition(s).oneOffPct };
 }
-const pick = (name: string) => fireEvent.click(screen.getByRole('radio', { name }));
+/** Opens "Grouping settings · For analysts" when it is closed. */
+function openSettings() {
+  if (!screen.queryByTestId('settings-body')) fireEvent.click(screen.getByText(FAMILIES_COPY.settingsTitle));
+}
+const pick = (name: string) => {
+  openSettings();
+  fireEvent.click(screen.getByRole('radio', { name }));
+};
 
 const FORBIDDEN = ['root cause', 'caused by', 'triggered by', 'owner', 'responsible', 'poor performing', 'correlation', 'noise', 'emerging', 'risk', 'anomaly'];
 const JARGON = [/\bR[012]\b/, /\btau\b/i, /τ/, /cosine/i, /threshold/i, /singleton/i, /famil(y|ies)/i, /entropy/i, /breadth/i, /\bARI\b/, /hash/i,
@@ -139,22 +149,31 @@ describe('flag ON', () => {
     expect(cards).toHaveLength(FAMILIES_DISPLAY.topCards);
     for (const card of cards) {
       expect(within(card).getByTestId('group-name').textContent).toMatch(/^(Example: |Group without text)/);
-      expect(within(card).getByTestId('fact-line').textContent).toMatch(/^\d+ this week · (typical [\d.]+ · [+−±]|New this period|no earlier weeks)|^\d+ incidents? through /);
+      // "Largest overall": the selected week is secondary, after the historical facts.
+      expect(within(card).getByTestId('fact-line').textContent).toMatch(/^Selected week: (\d+ this week · (previous (\d-week average|week) [\d.]+ · [+−±]|New this period|no earlier weeks)|\d+ incidents? through )/);
       expect(within(card).getByTestId('sparkline')).toBeInTheDocument();
-      expect(card).toHaveTextContent(/Mostly handled by/);
-      expect(card).toHaveTextContent(/Main service:/);
-      expect(card).toHaveTextContent(/incidents · appeared in \d+ of \d+ weeks/);
-      expect(within(card).getByTestId('last-seen').textContent).toMatch(/^Last seen [A-Z][a-z]{2} \d{1,2}$/);
-      expect(within(card).getByTestId('group-id')).toHaveAttribute('title', 'Group number within the current grouping setting');
-      // Card order: name → common words → week line → sparkline → handled by / service → totals.
-      const order = ['group-name', 'card-words', 'fact-line', 'sparkline', 'card-totals'].map(id => within(card).getByTestId(id));
+      expect(within(card).getByTestId('card-handled')).toHaveTextContent(/^Mostly handled by /);
+      expect(within(card).getByTestId('card-service')).toHaveTextContent(/^Main service: /);
+      expect(within(card).getByTestId('card-totals').textContent).toMatch(/^\d+ incidents? · seen in \d+ of \d+ weeks · Last seen [A-Z][a-z]{2} \d{1,2}$/);
+      // No group numbers, no common words on the card.
+      expect(within(card).queryByTestId('group-id')).toBeNull();
+      expect(card.textContent).not.toMatch(/\bG\d{2}\b|Common words/);
+      // Card order: name → totals → service → handled by → sparkline → selected week.
+      const order = ['group-name', 'card-totals', 'card-service', 'card-handled', 'sparkline', 'fact-line'].map(id => within(card).getByTestId(id));
       for (let i = 1; i < order.length; i++) {
         expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       }
     }
-    // Grouping controls sit above the group list; analyst details stay collapsed.
-    expect(screen.getByTestId('settings-panel').compareDocumentPosition(screen.getByTestId('group-cards')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Order: selected week → selected period → groups → grouping settings (collapsed, for analysts).
+    const sections = ['week-summary', 'period-summary', 'group-cards', 'settings-panel'].map(id => screen.getByTestId(id));
+    for (let i = 1; i < sections.length; i++) {
+      expect(sections[i - 1].compareDocumentPosition(sections[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(screen.getByTestId('week-summary')).toHaveTextContent(/^Selected week/);
+    expect(screen.getByTestId('period-summary')).toHaveTextContent(/^Selected period/);
+    expect(screen.getByTestId('grouping-status')).toHaveTextContent('Grouping: Balanced · Remove repeated templates');
     expect(screen.queryByTestId('settings-body')).toBeNull();
+    expect(container.textContent).not.toMatch(/\bG\d{2}\b|Common words/);
     // No letter-spaced uppercase section titles, no monospace text.
     expect(container.querySelector('.uppercase, .font-mono')).toBeNull();
     const text = container.textContent!;
@@ -179,29 +198,105 @@ describe('flag ON', () => {
     }
   });
 
-  it('group detail shows breakdowns, common words and incidents without numbers', async () => {
+  it('group detail: business first; Gxx and common words only under "For analysts"; raw text collapsed', async () => {
     ctx = contextFor(pbna, busyWeek);
     render(<FamiliesPage />);
     const card = (await screen.findAllByTestId('group-card'))[0];
     fireEvent.click(within(card).getByText(FAMILIES_COPY.seeIncidents));
     const detail = screen.getByTestId('group-detail');
-    expect(detail).toHaveTextContent('Handled by');
-    expect(detail).toHaveTextContent('Service');
-    expect(detail).toHaveTextContent(/Incidents in view · newest first/);
+    for (const title of ['Recent activity', 'Activity over time', 'Service', 'Handled by']) expect(within(detail).getByText(title)).toBeInTheDocument();
+    expect(within(detail).getByTestId('detail-count').textContent).toMatch(/^\d+ incidents? · seen in \d+ of \d+ weeks$/);
+    expect(within(detail).getByTestId('detail-context').textContent).toMatch(/^\d+ incidents? since [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
+    expect(detail.textContent).not.toMatch(/\bG\d{2}\b|Common words|W\d{2}\b/);
+    // Month labels on the activity axis, not ISO week codes.
+    expect(within(detail).getByTestId('activity-axis').textContent).toMatch(/^[A-Z][a-z]{2} \d{4}/);
+    // Raw incident text is not mounted until asked for, one incident at a time.
+    expect(within(detail).queryAllByTestId('incident-details')).toHaveLength(0);
+    const lines = within(detail).getAllByTestId('incident-line');
+    expect(lines.length).toBeLessThanOrEqual(5);
+    const withDetails = lines.find(l => within(l).queryByText(FAMILIES_COPY.viewIncidentDetails))!;
+    fireEvent.click(within(withDetails).getByText(FAMILIES_COPY.viewIncidentDetails));
+    expect(within(detail).getAllByTestId('incident-details')).toHaveLength(1);
+    fireEvent.click(within(detail).getByText(FAMILIES_COPY.analystDetails));
+    expect(within(detail).getByTestId('group-id').textContent).toMatch(/G\d{2}$/);
     for (const inc of pbna) expect(detail.textContent).not.toContain(inc.Number);
   });
 
-  it('grouping row: three strictness choices and text cleaning; notes and explorer under "For analysts"', async () => {
+  describe('group detail reconciles to one population', () => {
+    const scores = scoresOf.get(sap)!;
+    // Filter values that hold repeating incidents: the most frequent among grouped incidents.
+    const balanced = labelsOf(sap, 'balanced');
+    const mostFrequent = (dim: 'service' | 'serviceOffering') => {
+      const counts = new Map<string, number>();
+      sap.forEach((inc, i) => {
+        const v = dimensionValue(inc, dim);
+        if (balanced[i] >= 0 && v) counts.set(v, (counts.get(v) ?? 0) + 1);
+      });
+      return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    };
+    const service = mostFrequent('service');
+    const off = mostFrequent('serviceOffering');
+    const months = ['2026-03', '2026-04'];
+    const cases: [string, () => ReturnType<typeof contextFor>][] = [
+      ['no filters', () => contextFor(sap)],
+      ['Month', () => contextFor(sap, undefined, { view: filterIncidents(sap, { months, services: ALL_VALUES, serviceOfferings: ALL_VALUES }), months })],
+      ['Service', () => {
+        const services = { values: [service], includeMissing: false };
+        return contextFor(sap, undefined, { view: filterIncidents(sap, { months: [], services, serviceOfferings: ALL_VALUES }), months: [], services });
+      }],
+      ['Offering', () => {
+        const serviceOfferings = { values: [off], includeMissing: false };
+        return contextFor(sap, undefined, { view: filterIncidents(sap, { months: [], services: ALL_VALUES, serviceOfferings }), months: [], serviceOfferings });
+      }],
+      ['Quality', () => contextFor(sap, undefined, undefined, 'Poor')],
+    ];
+    for (const [name, make] of cases) {
+      it(`${name}: header = Service = Handled by = weekly activity = incident list; no regrouping`, async () => {
+        ctx = make();
+        render(<FamiliesPage />);
+        await screen.findByTestId('week-summary', {}, { timeout: 10000 });
+        const requests = workerRequests.length;
+        const cards = screen.getAllByTestId('group-card').slice(0, 2);
+        expect(cards.length).toBeGreaterThan(0);
+        for (const card of cards) {
+          const cardTotal = Number(within(card).getByTestId('card-totals').textContent!.split(' ')[0].replace(/,/g, ''));
+          fireEvent.click(within(card).getByText(FAMILIES_COPY.seeIncidents));
+          const detail = screen.getByTestId('group-detail');
+          const n = Number(within(detail).getByTestId('detail-count').dataset.count);
+          const sum = (els: HTMLElement[]) => els.reduce((a, e) => a + Number(e.dataset.count), 0);
+          expect(n).toBe(cardTotal);
+          expect(sum(within(within(detail).getByTestId('detail-service')).getAllByTestId('breakdown-row'))).toBe(n);
+          expect(sum(within(within(detail).getByTestId('detail-handled')).getAllByTestId('breakdown-row'))).toBe(n);
+          const weeksIn = within(detail).getAllByTestId('activity-week').filter(w => w.dataset.inPeriod === 'true');
+          expect(sum(weeksIn)).toBe(n);
+          expect(within(detail).getAllByTestId('activity-week').filter(w => w.dataset.inPeriod !== 'true').every(w => w.dataset.count === '0')).toBe(true);
+          expect(Number(within(detail).getByTestId('incident-list').dataset.count)).toBe(n);
+          expect(within(detail).getAllByTestId('incident-line')).toHaveLength(Math.min(5, n));
+          if (name !== 'no filters') expect(within(detail).getByTestId('detail-context').textContent).toMatch(/ in the whole file since /);
+          if (name === 'Quality') {
+            const poor = new Set(sap.filter((_, i) => scores[i].label === 'Poor'));
+            expect(n).toBeLessThanOrEqual(poor.size);
+          }
+          fireEvent.click(within(detail).getByLabelText('Close'));
+        }
+        expect(workerRequests.length).toBe(requests);
+      }, 30000);
+    }
+  });
+
+  it('grouping settings: collapsed for analysts; strictness, text cleaning, notes and explorer inside', async () => {
     ctx = contextFor(pbna, busyWeek);
     render(<FamiliesPage />);
     await screen.findByTestId('week-summary');
     const panel = screen.getByTestId('settings-panel');
-    expect(within(panel).getAllByRole('radio')).toHaveLength(3);
-    const cleaning = within(panel).getByLabelText(FAMILIES_COPY.textCleaning);
-    expect(within(cleaning).getAllByRole('option').map(o => o.textContent)).toEqual(['Original text', 'Remove repeated templates', 'Additional text normalization (experimental)']);
-    expect(panel).not.toHaveTextContent(FAMILIES_COPY.strictnessNote);
-    fireEvent.click(within(panel).getByText(FAMILIES_COPY.analystDetails));
+    expect(within(panel).queryAllByRole('radio')).toHaveLength(0);
+    expect(panel).toHaveTextContent('Grouping settings· For analysts');
+    // "Change" next to the read-only status opens the settings.
+    fireEvent.click(within(screen.getByTestId('grouping-status')).getByText('Change'));
     const body = screen.getByTestId('settings-body');
+    expect(within(body).getAllByRole('radio')).toHaveLength(3);
+    const cleaning = within(body).getByLabelText(FAMILIES_COPY.textCleaning);
+    expect(within(cleaning).getAllByRole('option').map(o => o.textContent)).toEqual(['Original text', 'Remove repeated templates', 'Additional text normalization (experimental)']);
     expect(body).toHaveTextContent(FAMILIES_COPY.strictnessNote);
     expect(screen.getByTestId('exploratory-default')).toHaveTextContent('Exploratory default — not a selected configuration.');
     expect(within(screen.getByTestId('threshold-explorer')).getAllByRole('row')).toHaveLength(1 + 4);
@@ -228,13 +323,13 @@ describe('flag ON', () => {
     expect(select.selectedOptions[0].textContent).toBe(`${weekRangeText(lastWeek)} · data through ${shortDate(throughDate)}`);
     expect(screen.getByTestId('kpi-total-label')).toHaveTextContent(`incidents through ${shortDate(throughDate)}`);
     expect(screen.getByTestId('coverage-message')).toHaveTextContent(
-      `This file has data through ${shortDate(throughDate)}. Comparison with typical is shown only for weeks fully covered by the data.`);
-    // The coverage message itself names "typical"; everything else in the block must not compare.
+      `This file has data through ${shortDate(throughDate)}. Comparison with the previous weeks' average is shown only for weeks fully covered by the data.`);
+    // The coverage message itself names the average; everything else in the block must not compare.
     const summary = screen.getByTestId('week-summary').textContent!.replace(screen.getByTestId('coverage-message').textContent!, '');
     const factLines = screen.getAllByTestId('fact-line').map(f => f.textContent!);
-    for (const line of factLines) expect(line).toMatch(new RegExp(`^\\d+ incidents? through ${shortDate(throughDate)}$`));
+    for (const line of factLines) expect(line).toMatch(new RegExp(`^Selected week: \\d+ incidents? through ${shortDate(throughDate)}$`));
     for (const t of [summary, ...factLines]) {
-      expect(t).not.toMatch(/New this period|typical|[+−±]\d|\d+%\)|above|below|normal/i);
+      expect(t).not.toMatch(/New this period|typical|average|[+−±]\d|\d+%\)|above|below|normal/i);
     }
     expect(container.textContent).not.toMatch(/partial|incomplete/i);
   });
@@ -275,22 +370,39 @@ describe('flag ON', () => {
     for (let i = 1; i < counts.length; i++) expect(counts[i - 1]).toBeGreaterThanOrEqual(counts[i]);
   });
 
-  it('distribution bar: counts reconcile, percentages sum to 100; caption names the period', async () => {
+  it('selected period and incident pattern distribution: repeating vs one-off, reconciled, period and denominator shown', async () => {
     ctx = contextFor(pbna);
     const { unmount } = render(<FamiliesPage />);
     await screen.findByTestId('distribution');
     const segs = screen.getAllByTestId('distribution-segment');
+    expect(segs.map(s => s.dataset.key)).toEqual(['repeating', 'oneOff']);
     expect(segs.reduce((a, s) => a + Number(s.dataset.count), 0)).toBe(pbna.length);
     expect(segs.reduce((a, s) => a + Number(s.dataset.pct), 0)).toBe(100);
-    expect(segs.map(s => s.dataset.key)).toEqual(distribution(pbna, pbna, labelsOf(pbna, 'balanced')).map(s => s.key));
+    const balanced = labelsOf(pbna, 'balanced');
+    const oneOff = settingSummary(pbna, pbna, balanced).oneOff;
+    expect(Number(segs[1].dataset.count)).toBe(oneOff);
+    const pct = (id: string) => Number(screen.getByTestId(id).textContent!.replace('%', ''));
+    expect(pct('composition-repeating') + pct('composition-one-off')).toBe(100);
     const first = pbna.map(i => i.Opened).sort()[0];
-    expect(screen.getByTestId('distribution')).toHaveTextContent(`${pbna.length} incidents since ${formatDataThrough(new Date(`${first.slice(0, 10)}T00:00:00Z`))}.`);
+    const last = utcDateKey(dataThrough(pbna)!);
+    expect(screen.getByTestId('period-label')).toHaveTextContent(
+      `${shortDate(first.slice(0, 10))}, ${first.slice(0, 4)} – ${shortDate(last)}, ${last.slice(0, 4)} · ${pbna.length} incidents`);
+    // Concentration: the top 5 share and the spread of the rest, as facts.
+    const groups = settingSummary(pbna, pbna, balanced).groups;
+    expect(screen.getByTestId('concentration').textContent).toMatch(new RegExp(`^Top 5 repeating groups account for (<1|\\d+)% of all incidents\\.The remaining repeating incidents are spread across ${groups - 5} other groups\\.$`));
+    // Top 5 / next 20 / remaining stay secondary, and split the repeating share exactly.
+    expect(screen.queryByTestId('repeating-breakdown')).toBeNull();
+    fireEvent.click(screen.getByText('Breakdown of repeating groups'));
+    const parts = within(screen.getByTestId('repeating-breakdown')).getAllByRole('listitem');
+    expect(parts.reduce((a, p) => a + Number(p.dataset.count), 0)).toBe(pbna.length - oneOff);
+    expect(parts.reduce((a, p) => a + Number(p.dataset.pct), 0)).toBe(pct('composition-repeating'));
     unmount();
-    const months = [...new Set(pbna.map(i => i.Opened.slice(0, 7)))].sort().slice(0, 4);
+    const months = [...new Set(pbna.map(i => i.Opened.slice(0, 7)))].sort().slice(1, 3);
     const view = pbna.filter(i => months.includes(i.Opened.slice(0, 7)));
     ctx = contextFor(pbna, undefined, { view, months });
     render(<FamiliesPage />);
-    expect(await screen.findByTestId('distribution')).toHaveTextContent(`${view.length} incidents in the selected period.`);
+    await screen.findByTestId('distribution');
+    expect(screen.getByTestId('period-label').textContent).toMatch(new RegExp(`^[A-Z][a-z]{2}( \\d{4})? – [A-Z][a-z]{2} \\d{4} · ${view.length} incidents$`));
     const filtered = screen.getAllByTestId('distribution-segment');
     expect(filtered.reduce((a, s) => a + Number(s.dataset.count), 0)).toBe(view.length);
     expect(filtered.reduce((a, s) => a + Number(s.dataset.pct), 0)).toBe(100);
@@ -300,6 +412,7 @@ describe('flag ON', () => {
     ctx = contextFor(pbna);
     render(<FamiliesPage />);
     await screen.findByTestId('week-summary');
+    openSettings();
     const line = () => screen.getByTestId('result-line').textContent;
     const bal = resultLine(pbna, pbna, labelsOf(pbna, 'balanced'));
     const bro = resultLine(pbna, pbna, labelsOf(pbna, 'broader'));
@@ -333,6 +446,7 @@ describe('flag ON', () => {
     await screen.findByTestId('week-summary');
     // R2 answers late, after R0 — the R2 answer belongs to a superseded request.
     workerDelay.R2 = 60;
+    openSettings();
     fireEvent.change(screen.getByLabelText(FAMILIES_COPY.textCleaning), { target: { value: 'R2' } });
     expect(screen.getByTestId('updating')).toHaveTextContent('Updating groups…');
     // The last result stays on screen while updating.
@@ -366,20 +480,25 @@ describe('flag ON', () => {
     await waitFor(() => expect(screen.getAllByTestId('group-card')).toHaveLength(6));
   });
 
-  it('one-off incidents: collapsed by default, then 20 at a time', async () => {
+  it('one-off incidents of the selected week: collapsed by default, then 5 at a time with more and fewer', async () => {
     const week = availableWeeks(sap)[availableWeeks(sap).length - 1];
     ctx = contextFor(sap, week);
     render(<FamiliesPage />);
     await screen.findByTestId('week-summary', {}, { timeout: 10000 });
     const row = screen.getByTestId('one-off-row');
     const n = Number(screen.getByTestId('kpi-one-off').textContent!.split(' ')[0]);
-    expect(n).toBeGreaterThan(20);
-    expect(row.textContent).toBe(`One-off incidents · ${n} · View incidents`);
+    expect(n).toBeGreaterThan(15);
+    expect(row.textContent).toBe(`${n} one-off incidents in the selected week · View incidents`);
     expect(screen.queryByTestId('one-off-list')).toBeNull();
     fireEvent.click(within(row).getByText('View incidents'));
-    expect(within(row).getAllByTestId('incident-line')).toHaveLength(20);
-    fireEvent.click(within(row).getByText(`Show ${Math.min(20, n - 20)} more`));
-    expect(within(row).getAllByTestId('incident-line')).toHaveLength(Math.min(40, n));
+    expect(within(row).getAllByTestId('incident-line')).toHaveLength(5);
+    expect(within(row).queryAllByTestId('incident-details')).toHaveLength(0);
+    fireEvent.click(within(row).getByText('Show more incidents'));
+    expect(within(row).getAllByTestId('incident-line')).toHaveLength(15);
+    fireEvent.click(within(row).getByText('Show fewer'));
+    expect(within(row).getAllByTestId('incident-line')).toHaveLength(5);
+    fireEvent.click(within(row).getByText('Hide incidents'));
+    expect(screen.queryByTestId('one-off-list')).toBeNull();
     for (const inc of sap) expect(row.textContent).not.toContain(inc.Number);
   }, 20000);
 
@@ -390,19 +509,19 @@ describe('flag ON', () => {
     const prev = availableWeeks(pbna)[availableWeeks(pbna).length - 2];
     for (const card of screen.getAllByTestId('group-card')) {
       expect(within(card).getByTestId('last-covered-line').textContent).toMatch(
-        new RegExp(`^Last fully covered week \\(${weekRangeText(prev)}\\): \\d+ · (typical [\\d.]+ · [+−±]|New this period|no earlier weeks to compare)`));
+        new RegExp(`^Last fully covered week \\(${weekRangeText(prev)}\\): \\d+ · (previous (\\d-week average|week) [\\d.]+ · [+−±]|New this period|no earlier weeks to compare)`));
     }
   });
 
-  it('Quality filter changes only the visible population: no new computation, same groups and IDs', async () => {
+  it('Quality filter changes only the visible population: no new computation, same groups', async () => {
     // syn_sap: the fictional file whose incidents carry more than one quality label.
     const week = availableWeeks(sap)[availableWeeks(sap).length - 3];
     ctx = contextFor(sap, week);
     const { unmount } = render(<FamiliesPage />);
     await screen.findByTestId('week-summary', {}, { timeout: 10000 });
     for (let k = 0; k < 10 && screen.queryByText(/^Show \d+ more group/); k++) fireEvent.click(screen.getByText(/^Show \d+ more group/));
-    // Group number → example name, unfiltered (example names can repeat across groups; numbers cannot).
-    const before = new Map(screen.getAllByTestId('group-card').map(c => [within(c).getByTestId('group-id').textContent, within(c).getByTestId('group-name').textContent]));
+    // Group names unfiltered: the filtered page shows a subset of the same groups (membership never changes).
+    const before = new Set(screen.getAllByTestId('group-card').map(c => within(c).getByTestId('group-name').textContent));
     const requests = workerRequests.length;
     unmount();
     const scores = scoresOf.get(sap)!;
@@ -421,15 +540,51 @@ describe('flag ON', () => {
     const segs = screen.getAllByTestId('distribution-segment');
     expect(segs.reduce((a, s) => a + Number(s.dataset.count), 0)).toBe(good.size);
     for (let k = 0; k < 10 && screen.queryByText(/^Show \d+ more group/); k++) fireEvent.click(screen.getByText(/^Show \d+ more group/));
-    let compared = 0;
-    for (const c of screen.getAllByTestId('group-card')) {
-      const id = within(c).getByTestId('group-id').textContent;
-      if (before.has(id)) {
-        expect(within(c).getByTestId('group-name').textContent).toBe(before.get(id));
-        compared++;
-      }
+    const after = screen.getAllByTestId('group-card').map(c => within(c).getByTestId('group-name').textContent);
+    expect(after.length).toBeGreaterThan(0);
+    for (const name of after) expect(before.has(name)).toBe(true);
+  }, 30000);
+
+  it('sort by selected week makes the selected week a primary card fact', async () => {
+    ctx = contextFor(pbna, busyWeek);
+    render(<FamiliesPage />);
+    await screen.findByTestId('week-summary');
+    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'selectedWeek' } });
+    for (const card of screen.getAllByTestId('group-card')) {
+      const fact = within(card).getByTestId('fact-line');
+      expect(fact.textContent).toMatch(/^\d+ this week/);
+      expect(fact.compareDocumentPosition(within(card).getByTestId('card-service')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
-    expect(compared).toBeGreaterThan(0);
+  });
+
+  it('"Show fewer" returns to 6 cards; hidden cards are never mounted', async () => {
+    ctx = contextFor(pbna);
+    render(<FamiliesPage />);
+    await screen.findByTestId('week-summary');
+    expect(screen.queryByText('Show fewer')).toBeNull();
+    fireEvent.click(screen.getByText('Show 6 more groups'));
+    expect(screen.getAllByTestId('group-card')).toHaveLength(12);
+    fireEvent.click(screen.getByText('Show fewer'));
+    expect(screen.getAllByTestId('group-card')).toHaveLength(6);
+    expect(screen.queryByText(/^Show all/)).toBeNull();
+  });
+
+  it('names: "Remove repeated templates" uses the cleaned text of the same representative; "Original text" keeps today\'s names', async () => {
+    ctx = contextFor(sap);
+    render(<FamiliesPage />);
+    await screen.findByTestId('week-summary', {}, { timeout: 10000 });
+    const names = () => screen.getAllByTestId('group-name').map(n => [n.textContent!, n.getAttribute('title')!]);
+    const r1 = names();
+    for (const [shown, full] of r1) {
+      expect(shown).toMatch(/^(Example: |Group without text)/);
+      expect(full).toMatch(/^(Example: |Group without text)/);
+      expect(shown.replace(/^Example: /, '').length).toBeLessThanOrEqual(FAMILIES_DISPLAY.cleanedNameMaxChars + 1);
+      expect(shown).not.toMatch(/_|\.{2,}/);
+    }
+    openSettings();
+    fireEvent.change(screen.getByLabelText(FAMILIES_COPY.textCleaning), { target: { value: 'R0' } });
+    await waitFor(() => expect(screen.queryByTestId('updating')).toBeNull(), { timeout: 10000 });
+    for (const [shown] of names()) expect(shown.replace(/^Example: /, '').length).toBeLessThanOrEqual(FAMILIES_DISPLAY.nameMaxChars + 1);
   }, 30000);
 
   it('above the compute guard shows the message and computes nothing', () => {

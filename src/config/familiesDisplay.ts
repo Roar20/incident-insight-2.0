@@ -37,14 +37,15 @@ export const FAMILIES_DISPLAY = {
   strictness: { broader: 0.6, balanced: 0.7, stricter: 0.8 },
   /** Group cards shown first, and added by each "Show 6 more groups" (never all at once). */
   topCards: 6,
-  /** One-off incidents (and a group's incidents) listed per "Show 20 more". */
-  incidentPage: 20,
   /** Characters of the example incident shown as the group name. */
   nameMaxChars: 60,
+  /** Characters of a name taken from the cleaned text (Remove repeated templates / Additional normalization). */
+  cleanedNameMaxChars: 90,
+  /** Incidents listed first in a group's detail and the one-off list, and added per "Show more incidents". */
+  incidentFirst: 5,
+  incidentStep: 10,
   /** Common words shown in a group's detail. */
   commonWords: 5,
-  /** Common words shown on a card (the first of the detail's words). */
-  cardWords: 3,
   /** Groups counted in the concentration line. */
   concentrationTop: 5,
   /** Distribution bar: the largest groups, then the next ones; the rest are "remaining". */

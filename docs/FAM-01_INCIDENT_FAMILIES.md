@@ -119,3 +119,55 @@ easy to miss, and "Show all" mounted every group at once.
   unchanged (other pages use them).
 - Display performance: the term vectors used for names and common words are
   computed once per text cleaning instead of once per strictness change.
+
+## FAM-01.4 — business comprehension pass (no analytical changes)
+
+The page answers, in order: the selected week, how much demand repeats in the
+selected period, how concentrated it is, the largest groups, and, per group,
+when, where, who and which incidents.
+
+- **Selected week** and **Selected period** are separate, titled sections.
+  The period is shown with its denominator, derived from the filters
+  ("Sep 2026 · 255 incidents"; without a time filter, the file's first to last
+  date). "· current filters" marks Service, Offering or Quality filters.
+- **Incident pattern distribution**: repeating patterns vs one-off incidents
+  (largest remainder, sums to 100). Concentration is stated as facts ("Top 5
+  repeating groups account for 11% of all incidents. The remaining repeating
+  incidents are spread across 51 other groups."). Top 5 / next 20 / remaining
+  is a collapsed secondary breakdown whose percentages split the displayed
+  repeating share exactly. A non-zero share under one point reads "<1%".
+- **Group names** (display only). With "Remove repeated templates" or
+  "Additional text normalization", the name is the first line of the *same*
+  representative incident, after the active text cleaning, with at least 3
+  words; template lines and template word runs are removed, and for
+  "Additional text normalization" identifier tokens too. The cleaned lines,
+  joined, equal the text the groups were built from (tested). No qualifying
+  line → today's name. "Original text" keeps today's names. The tooltip keeps
+  the original text. Templates are refitted on the same texts for this; the
+  grouping computation is unchanged.
+- **Cards**: name; incidents in the displayed population and weeks seen
+  (of the selected period's weeks); last seen; main service; main handling
+  group; sparkline. The selected week is secondary under "Largest overall" and
+  primary under "Most incidents in selected week". No group number, no common
+  words. "Show 6 more groups" / "Show fewer".
+- **Group detail — one population.** Header, activity chart, Service and
+  Handled by breakdowns and incident list all use the group's incidents in the
+  displayed population, and reconcile (tested for no filter, Month, Service,
+  Offering, Quality). Breakdowns show the top 5 values plus "Other". The context
+  line adds the group's whole-file size and first date when filters apply.
+- **Activity over time**: weekly bars over every calendar week, month labels on
+  the axis, week range on hover. With a month filter, weeks outside the period
+  are drawn lighter from the whole file and are not counted. The Data-through
+  week stays outlined.
+- **"typical" wording.** `typical` is unchanged: the group's mean weekly count
+  (displayed population, weeks with none count as 0) over the up-to-4 weeks
+  with data in the file just before the week (`baselineWeeksFor`). It now
+  reads "previous 4-week average" (or "previous N-week average" / "previous
+  week" when fewer weeks exist).
+- **Incidents**: 5 at first, "Show more incidents" (+10), "Show fewer"; the
+  source text of one incident only after "View incident details".
+- **For analysts**: grouping settings (strictness, text cleaning, template
+  frequency level, notes, similarity table) in one collapsed panel at the
+  bottom; a read-only "Grouping: Balanced · Remove repeated templates · Change"
+  line sits above the cards. In the group detail, the group number and common
+  words are under a collapsed "For analysts".

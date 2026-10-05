@@ -14,8 +14,10 @@ import type { AnnotatedIncident } from '../problems';
 import { weekKey, weekStart } from '../periods';
 import { baselineWeeksFor } from '../weekly';
 import { dimensionValue } from '../serviceDimension';
+import { FAMILIES_RESEARCH } from '../../config/familiesResearch';
 import { familyIdentity } from './view';
-import { pyLower } from './pyText';
+import { pyCollapseSpace, pyDigitsToZero, pyLower, pyStrip, pyWords } from './pyText';
+import { identifierType, type Templates } from './variants';
 
 type Incident = Pick<AnnotatedIncident,
   'Number' | 'Opened' | 'week' | 'extraFields' | 'Assignment group' | 'clusterId' | 'shortDescClean' | 'descClean'>;
@@ -90,16 +92,17 @@ export const formatCount = (n: number) => n.toLocaleString('en-US');
 export const wholePct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 /**
- * Whole percentages of `counts` that always sum to 100 (largest-remainder
- * method): floors first, then the leftover points go to the largest
- * remainders, ties to the earlier position. All zeros when the total is 0.
+ * Whole percentages of `counts` that always sum to 100 — or to `points`, to
+ * split an already rounded share among its parts (largest-remainder method):
+ * floors first, then the leftover points go to the largest remainders, ties
+ * to the earlier position. All zeros when the total is 0.
  */
-export function largestRemainderPct(counts: number[]): number[] {
+export function largestRemainderPct(counts: number[], points = 100): number[] {
   const total = counts.reduce((a, b) => a + b, 0);
   if (total <= 0) return counts.map(() => 0);
-  const exact = counts.map(c => (c * 100) / total);
+  const exact = counts.map(c => (c * points) / total);
   const out = exact.map(Math.floor);
-  let left = 100 - out.reduce((a, b) => a + b, 0);
+  let left = points - out.reduce((a, b) => a + b, 0);
   const order = exact.map((x, i) => ({ r: x - Math.floor(x), i })).sort((a, b) => b.r - a.r || a.i - b.i);
   for (let k = 0; left > 0; k = (k + 1) % order.length, left--) out[order[k].i]++;
   return out;
@@ -335,7 +338,10 @@ export interface GroupCard {
   service: TopShare;
   /** Distinct weeks with incidents of the group (active filtered population). */
   weeksAppeared: number;
+  /** Calendar weeks of the selected period (every week of the file without a time filter). */
   totalWeeks: number;
+  /** Weeks averaged for the selected week's typical (0 when not comparable). */
+  baselineWeeks: number;
   /** Latest Opened among the group's incidents in the active filtered population, "YYYY-MM-DD" ('' when none is dated). */
   lastSeen: string;
   /**
@@ -349,6 +355,8 @@ export interface GroupCard {
 export interface WeekComparison {
   week: string;
   count: number;
+  /** Weeks averaged for `typical`: up to 4 weeks with data in the file, just before `week`. */
+  baselineWeeks: number;
   typical: number | null;
   change: number | null;
   pct: number | null;
@@ -367,6 +375,10 @@ export interface GroupContext {
   /** Calendar date of the latest Opened in the full file, "YYYY-MM-DD". */
   dataThroughDate: string;
   sort?: GroupSort;
+  /** Month filter ("YYYY-MM"); empty = no time filter. Sets the weeks of the selected period. */
+  months?: string[];
+  /** Display name of a group from its representative row (default: `groupName`). */
+  nameOf?: (row: number) => { short: string; full: string };
 }
 
 /**
@@ -374,8 +386,11 @@ export interface GroupContext {
  * orders by that total; "selectedWeek" by the selected week's count, then the
  * total. Ties fall back to the canonical group order. Descriptive orderings only.
  */
-export function groupCards({ incidents, view, labels, identity, texts, weeksWithData, selectedWeek, dataThroughDate, sort = 'largest' }: GroupContext): GroupCard[] {
+export function groupCards({ incidents, view, labels, identity, texts, weeksWithData, selectedWeek, dataThroughDate, sort = 'largest', months = [], nameOf }: GroupContext): GroupCard[] {
   const calendar = calendarWeeks(weeksWithData);
+  const periodWeekCount = periodWeeks(calendar, months).length;
+  // Every incident of the group in the displayed population, dated or not.
+  const viewTotal = new Map<number, number>();
   const col = new Map(calendar.map((w, i) => [w, i]));
   const rowOf = new Map<Incident, number>();
   incidents.forEach((inc, i) => rowOf.set(inc, i));
@@ -390,6 +405,7 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
   const lastSeen = new Map<number, string>();
   for (const inc of view) {
     const l = labels[rowOf.get(inc)!];
+    if (l >= 0) viewTotal.set(l, (viewTotal.get(l) ?? 0) + 1);
     if (l < 0 || !col.has(inc.week)) continue;
     let series = viewWeekly.get(l);
     if (!series) viewWeekly.set(l, (series = new Array(calendar.length).fill(0)));
@@ -403,7 +419,7 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
     const typical = baseline.length ? baseline.reduce((s, w) => s + series[col.get(w)!], 0) / baseline.length : null;
     const change = typical === null ? null : count - typical;
     return {
-      week, count, typical, change,
+      week, count, baselineWeeks: baseline.length, typical, change,
       pct: typical !== null && typical > 0 ? Math.round((change! / typical) * 100) : null,
       newThisPeriod: typical === 0 && count > 0,
     };
@@ -419,8 +435,8 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
     cards.push({
       label,
       id: identity.ids.get(label)!,
-      name: groupName(incidents[texts.get(label)!.representative]),
-      total: series.reduce((a, b) => a + b, 0),
+      name: (nameOf ?? (r => groupName(incidents[r])))(texts.get(label)!.representative),
+      total: viewTotal.get(label)!,
       count: selected.count, comparable, typical,
       change: comparable ? selected.change : null,
       pct: comparable ? selected.pct : null,
@@ -429,7 +445,8 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
       handledBy: topShare(members.map(i => dimensionValue(incidents[i], 'assignmentGroup'))),
       service: topShare(members.map(i => dimensionValue(incidents[i], 'service'))),
       weeksAppeared: series.filter(v => v > 0).length,
-      totalWeeks: calendar.length,
+      totalWeeks: periodWeekCount,
+      baselineWeeks: comparable ? selected.baselineWeeks : 0,
       lastSeen: (lastSeen.get(label) ?? '').slice(0, 10),
       lastCovered: lastCoveredWeek ? compare(series, lastCoveredWeek) : null,
     });
@@ -445,18 +462,27 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
  * or "… · New this period". A week the data does not fully cover: only the
  * count, "3 incidents through Sep 30" — never a comparison.
  */
-export function factLine(card: Pick<GroupCard, 'count' | 'typical' | 'change' | 'newThisPeriod' | 'comparable'>, dataThroughDate = ''): string {
+export function factLine(card: Pick<GroupCard, 'count' | 'typical' | 'change' | 'newThisPeriod' | 'comparable' | 'baselineWeeks'>, dataThroughDate = ''): string {
   if (!card.comparable) return `${formatCount(card.count)} ${card.count === 1 ? 'incident' : 'incidents'} through ${shortDate(dataThroughDate)}`;
   return `${formatCount(card.count)} this week · ${comparisonText(card)}`;
 }
 
-/** "typical 9 · +5", "New this period" or "no earlier weeks to compare". */
-function comparisonText(c: Pick<WeekComparison, 'typical' | 'change' | 'newThisPeriod'>): string {
+/**
+ * "previous 4-week average 9 · +5", "New this period" or "no earlier weeks to compare".
+ * The average is `typical`: the group's mean weekly count (zeros included) over
+ * the up-to-4 weeks with data in the file just before the week.
+ */
+function comparisonText(c: Pick<WeekComparison, 'typical' | 'change' | 'newThisPeriod' | 'baselineWeeks'>): string {
   if (c.newThisPeriod) return 'New this period';
   if (c.typical === null) return 'no earlier weeks to compare';
   const rounded = Math.round(c.change! * 10) / 10;
   const delta = rounded === 0 ? '±0' : `${rounded > 0 ? '+' : '−'}${typicalText(Math.abs(rounded))}`;
-  return `typical ${typicalText(c.typical)} · ${delta}`;
+  return `${averageLabel(c.baselineWeeks)} ${typicalText(c.typical)} · ${delta}`;
+}
+
+/** "previous 4-week average", "previous week" — names the weeks `typical` averages. */
+export function averageLabel(baselineWeeks: number): string {
+  return baselineWeeks === 1 ? 'previous week' : `previous ${baselineWeeks}-week average`;
 }
 
 /** "Last fully covered week (Sep 22 – Sep 28): 4 · typical 3 · +1". */
@@ -610,4 +636,185 @@ export function membersNewestFirst<T extends Incident>(incidents: T[], view: T[]
   return view
     .filter(inc => (label === 'one-off' ? labels[rowOf.get(inc)!] < 0 : labels[rowOf.get(inc)!] === label) && (!week || inc.week === week))
     .sort((a, b) => b.Opened.localeCompare(a.Opened));
+}
+
+// ---------------------------------------------------------------------------
+// FAM-01.4: selected period, shares, readable names, group activity
+// ---------------------------------------------------------------------------
+
+const monthKeyOf = (d: Date) => d.toISOString().slice(0, 7);
+
+/** Calendar weeks of the selected period: every week with a day in a selected month (all weeks without a time filter). */
+export function periodWeeks(calendar: string[], months: string[]): string[] {
+  if (months.length === 0) return calendar;
+  const selected = new Set(months);
+  return calendar.filter(w => {
+    const start = weekStart(w);
+    if (!start) return false;
+    for (let d = 0; d < 7; d++) if (selected.has(monthKeyOf(new Date(start.getTime() + d * 86400000)))) return true;
+    return false;
+  });
+}
+
+const monthName = (key: string, withYear: boolean) =>
+  new Date(`${key}-01T00:00:00Z`).toLocaleString('en-US', { month: 'short', year: withYear ? 'numeric' : undefined, timeZone: 'UTC' });
+const nextMonth = (key: string) => {
+  const [y, m] = key.split('-').map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+};
+
+/**
+ * The selected period in words: "Sep 2026", "Jul – Sep 2026", "Nov 2025 – Feb 2026",
+ * "Jan, Mar 2026"; without a time filter, the file's first to last date
+ * ("Jan 1 – Oct 1, 2026").
+ */
+export function periodLabel(months: string[], firstDate: string, lastDate: string): string {
+  if (months.length === 0) {
+    if (!firstDate || !lastDate) return 'All data';
+    const year = (k: string) => k.slice(0, 4);
+    return year(firstDate) === year(lastDate)
+      ? `${shortDate(firstDate)} – ${shortDate(lastDate)}, ${year(lastDate)}`
+      : `${shortDate(firstDate)}, ${year(firstDate)} – ${shortDate(lastDate)}, ${year(lastDate)}`;
+  }
+  const sorted = [...new Set(months)].sort();
+  const runs: [string, string][] = [];
+  for (const m of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && nextMonth(last[1]) === m) last[1] = m;
+    else runs.push([m, m]);
+  }
+  const years = new Set(sorted.map(m => m.slice(0, 4)));
+  if (runs.length === 1) {
+    const [a, b] = runs[0];
+    if (a === b) return monthName(a, true);
+    return a.slice(0, 4) === b.slice(0, 4) ? `${monthName(a, false)} – ${monthName(b, true)}` : `${monthName(a, true)} – ${monthName(b, true)}`;
+  }
+  const one = years.size === 1;
+  const text = runs.map(([a, b]) => (a === b ? monthName(a, !one) : `${monthName(a, !one)} – ${monthName(b, !one)}`)).join(', ');
+  return one ? `${text} ${[...years][0]}` : text;
+}
+
+/** "11%", or "<1%" for a non-zero share that rounds to 0. Shares are of all incidents in the population. */
+export function shareLabel(pct: number, count: number): string {
+  return pct === 0 && count > 0 ? '<1%' : `${pct}%`;
+}
+
+/** Repeating vs one-off incidents of a population: counts and largest-remainder percentages (sum to 100). */
+export function composition(summary: SettingSummary): { repeating: number; oneOff: number; repeatingPct: number; oneOffPct: number } {
+  const repeating = summary.population - summary.oneOff;
+  const [repeatingPct, oneOffPct] = largestRemainderPct([repeating, summary.oneOff]);
+  return { repeating, oneOff: summary.oneOff, repeatingPct, oneOffPct };
+}
+
+// --- Readable names from the active text cleaning (display only) -----------
+
+/** Same keys as the text cleaning uses to recognise a template line and a word n-gram. */
+const templateLineKey = (line: string) => pyDigitsToZero(pyStrip(pyCollapseSpace(pyLower(line))));
+const templateToken = (token: string) => pyDigitsToZero(pyLower(token));
+const HAS_LETTER = /\p{L}/u;
+
+/**
+ * The incident's open-time text after the active text cleaning, line by line:
+ * template lines removed, template word runs removed, identifier tokens
+ * removed for "Additional text normalization". Joined, the lines are exactly
+ * the cleaned text the groups were built from (tested), before lowercasing.
+ * Display only.
+ */
+export function cleanedLines(text: string, templates: Templates, variant: 'R1' | 'R2'): string[][] {
+  const n = FAMILIES_RESEARCH.ngramN;
+  const lines = text.split('\n').filter(l => !templates.lines.has(templateLineKey(l))).map(l => pyWords(l));
+  const flat = lines.flat();
+  const drop = new Uint8Array(flat.length);
+  if (templates.grams.size > 0) {
+    const toks = flat.map(templateToken);
+    for (let i = 0; i + n <= toks.length; i++) {
+      if (templates.grams.has(toks.slice(i, i + n).join('\u0001'))) drop.fill(1, i, i + n);
+    }
+  }
+  let k = 0;
+  return lines.map(words => words.filter(w => {
+    const keep = !drop[k++];
+    return keep && (variant === 'R1' || identifierType(w) === null);
+  }));
+}
+
+/**
+ * Group name for "Remove repeated templates" / "Additional text normalization":
+ * the representative incident's first cleaned line with at least 3 words,
+ * tidied for display and trimmed. null when no line qualifies (callers fall
+ * back to `groupName`). The tooltip keeps the original text.
+ */
+export function cleanedGroupName(incident: Pick<Incident, 'shortDescClean' | 'descClean'>, templates: Templates, variant: 'R1' | 'R2'): { short: string; full: string } | null {
+  const text = (incident.shortDescClean || '') + '\n' + (incident.descClean || '');
+  const line = cleanedLines(text, templates, variant).find(ws => ws.filter(w => HAS_LETTER.test(w)).length >= 3);
+  if (!line) return null;
+  const max = FAMILIES_DISPLAY.cleanedNameMaxChars;
+  const shown = displayText(line.join(' '));
+  const short = shown.length > max ? `${shown.slice(0, max).trimEnd()}…` : shown;
+  return { short: `Example: ${short}`, full: groupName(incident).full };
+}
+
+// --- Group detail: one population -----------------------------------------
+
+export interface BreakdownRow {
+  value: string | null;
+  count: number;
+  /** Largest-remainder whole percent of the group's incidents in view; rows sum to 100. */
+  pct: number;
+  /** "Other" row aggregating the remaining values. */
+  otherValues?: number;
+}
+
+/** Top values plus one "Other" row, so the rows always add up to the incidents counted. */
+export function breakdownRows(values: (string | null)[], top = 5): BreakdownRow[] {
+  const all = breakdown(values);
+  const head = all.slice(0, top).map(b => ({ value: b.value, count: b.count }));
+  const rest = all.slice(top);
+  const rows: Omit<BreakdownRow, 'pct'>[] = rest.length
+    ? [...head, { value: null, count: rest.reduce((a, b) => a + b.count, 0), otherValues: rest.length }]
+    : head;
+  const pcts = largestRemainderPct(rows.map(r => r.count));
+  return rows.map((r, i) => ({ ...r, pct: pcts[i] }));
+}
+
+export interface ActivityWeek {
+  week: string;
+  /** Incidents of the group in the displayed population (0 outside the selected period). */
+  count: number;
+  /** The week belongs to the selected period. */
+  inPeriod: boolean;
+  /** Whole-file incidents of the group, drawn muted for weeks outside the selected period. */
+  fileCount: number;
+}
+
+/** Weekly activity of one group over every calendar week of the file. */
+export function groupActivity(members: Incident[], fileMembers: Incident[], calendar: string[], months: string[]): ActivityWeek[] {
+  const inPeriod = new Set(periodWeeks(calendar, months));
+  const count = new Map<string, number>();
+  const file = new Map<string, number>();
+  for (const m of members) if (m.week) count.set(m.week, (count.get(m.week) ?? 0) + 1);
+  for (const m of fileMembers) if (m.week) file.set(m.week, (file.get(m.week) ?? 0) + 1);
+  return calendar.map(week => ({ week, count: inPeriod.has(week) ? count.get(week) ?? 0 : 0, inPeriod: inPeriod.has(week), fileCount: file.get(week) ?? 0 }));
+}
+
+/** Month tick positions for a weekly axis: the first week of each month (by its Thursday), "Jan" or "Jan 2026" at a year change. */
+export function monthTicks(calendar: string[]): { index: number; label: string }[] {
+  const out: { index: number; label: string }[] = [];
+  let prev = '';
+  calendar.forEach((w, i) => {
+    const start = weekStart(w);
+    if (!start) return;
+    const key = monthKeyOf(new Date(start.getTime() + 3 * 86400000));
+    if (key === prev) return;
+    out.push({ index: i, label: monthName(key, !prev || key.slice(0, 4) !== prev.slice(0, 4)) });
+    prev = key;
+  });
+  return out;
+}
+
+/** Full-file context of a group: incidents and first Opened date ("YYYY-MM-DD"). */
+export function groupHistory(fileMembers: Pick<Incident, 'Opened'>[]): { total: number; firstDate: string } {
+  let first = '';
+  for (const m of fileMembers) if (m.Opened && (!first || m.Opened < first)) first = m.Opened;
+  return { total: fileMembers.length, firstDate: first.slice(0, 10) };
 }
