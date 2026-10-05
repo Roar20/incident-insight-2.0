@@ -10,6 +10,8 @@ import WeeklyPage from '@/pages/WeeklyPage';
 import ProblemsPage from '@/pages/ProblemsPage';
 import OrigenPage from '@/pages/OrigenPage';
 import ExecutiveSummaryPage from '@/pages/ExecutiveSummaryPage';
+import FamiliesPage from '@/pages/FamiliesPage';
+import { familiesEnabled } from '@/config/families';
 
 export default function Dashboard() {
   const { currentPage } = useAppContext();
@@ -26,6 +28,8 @@ export default function Dashboard() {
       case 'incidents': return <AllIncidentsPage />;
       case 'agents': return <ByAgentPage />;
       case 'groups': return <ByGroupPage />;
+      // Experimental, flag-gated: unreachable unless VITE_EXPERIMENTAL_FAMILIES=on.
+      case 'families': return familiesEnabled() ? <FamiliesPage /> : <OverviewPage />;
       default: return <OverviewPage />;
     }
   };

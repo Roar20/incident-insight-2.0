@@ -1,5 +1,6 @@
 import { useAppContext } from '@/context/AppContext';
-import { BarChart3, FileText, Users, Building2, LayoutDashboard, TrendingUp, CalendarRange, Search, Compass, Presentation, type LucideIcon } from 'lucide-react';
+import { familiesEnabled } from '@/config/families';
+import { BarChart3, FileText, Users, Building2, LayoutDashboard, TrendingUp, CalendarRange, Search, Compass, Presentation, FlaskConical, type LucideIcon } from 'lucide-react';
 
 interface NavItem {
   id: string;
@@ -20,6 +21,11 @@ const pages: NavItem[] = [
   { id: 'groups', label: 'By Group', icon: Building2 },
 ];
 
+/** Experimental, flag-gated views (VITE_EXPERIMENTAL_FAMILIES=on). */
+const experimentalPages: NavItem[] = [
+  { id: 'families', label: 'Incident Families (experimental)', icon: FlaskConical },
+];
+
 const filterLabels = [
   { id: 'all', label: 'Show All' },
   { id: 'Excellent', label: 'Excellent', dotColor: 'hsl(145,70%,38%)' },
@@ -30,6 +36,7 @@ const filterLabels = [
 
 export default function AppSidebar() {
   const { currentPage, setCurrentPage, filterLabel, setFilterLabel, fileName } = useAppContext();
+  const navPages = familiesEnabled() ? [...pages, ...experimentalPages] : pages;
 
   return (
     <aside className="w-[220px] min-w-[220px] bg-sidebar flex flex-col h-screen">
@@ -46,7 +53,7 @@ export default function AppSidebar() {
         <div className="px-3 py-2 text-[9px] font-bold tracking-[0.14em] uppercase text-sidebar-foreground/40 font-mono">
           Views
         </div>
-        {pages.map(p => (
+        {navPages.map(p => (
           <button
             key={p.id}
             onClick={() => setCurrentPage(p.id)}
