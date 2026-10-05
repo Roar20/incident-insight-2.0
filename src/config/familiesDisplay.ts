@@ -8,7 +8,12 @@ import { FAMILIES_RESEARCH } from './familiesResearch';
 type TextVariant = (typeof FAMILIES_RESEARCH.variants)[number];
 
 export const FAMILIES_DISPLAY = {
-  defaultVariant: 'R0' as TextVariant,
+  /**
+   * Exploratory UI default (FAM-01.2): R1 at τ 0.05, an already-registered
+   * configuration. Changes only what the page opens with — not R1, M1, the
+   * grids or parity. Not a selected or recommended configuration.
+   */
+  defaultVariant: 'R1' as TextVariant,
   defaultTau: 0.05,
   defaultThreshold: 0.7,
   /**
@@ -36,4 +41,9 @@ export const FAMILIES_DISPLAY = {
   nameMaxChars: 60,
   /** Common words shown in a group's detail. */
   commonWords: 5,
+  /** Groups counted in the concentration line. */
+  concentrationTop: 5,
+  /** Sparkline height and the minimum drawn height of a non-zero week (pixels, drawing only). */
+  sparklineHeight: 28,
+  sparklineMinBar: 3,
 } as const;

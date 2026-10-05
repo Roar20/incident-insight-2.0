@@ -11,8 +11,10 @@ import { FAMILIES_DISPLAY } from '../../config/familiesDisplay';
 import { computeFamilyPartitions } from './families';
 import { canonicalLabels } from './m1';
 import { buildVariant, openTimeText } from './variants';
+import { dataThrough } from '../weeklyComposition';
 import {
-  calendarWeeks, factLine, groupCards, groupIdentity, groupName, groupTexts, topShare, weekRangeText, weekSummary,
+  calendarWeeks, concentration, concentrationLead, displayText, factLine, groupCards, groupIdentity, groupName, groupTexts,
+  isWeekComparable, shortDate, sparklineHeights, topShare, utcDateKey, weekEndDate, weekMonthLabel, weekOptionText, weekRangeText, weekSummary,
 } from './presentation';
 
 function load(file: string): AnnotatedIncident[] {
@@ -108,6 +110,9 @@ describe('group cards', () => {
   const identity = groupIdentity(incidents, labels);
   const gtexts = groupTexts(incidents, docs, labels);
   const calendar = calendarWeeks(weeks);
+  const throughDate = utcDateKey(dataThrough(incidents)!);
+  const base = { incidents, view: incidents, labels, identity, texts: gtexts, weeksWithData: weeks, dataThroughDate: throughDate };
+  const canonical = (a: { label: number }, b: { label: number }) => identity.rank.get(a.label)! < identity.rank.get(b.label)!;
 
   it('IDs are G01… by total size', () => {
     const sizes = new Map<number, number>();
@@ -117,41 +122,191 @@ describe('group cards', () => {
     for (let i = 1; i < byId.length; i++) expect(sizes.get(byId[i - 1][0])!).toBeGreaterThanOrEqual(sizes.get(byId[i][0])!);
   });
 
-  it('lists groups active in the week by count, then size, then canonical order; sparkline spans every calendar week', () => {
-    let checkedNew = false;
-    for (const week of weeks.slice(5)) {
-      const cards = groupCards({ incidents, view: incidents, labels, identity, texts: gtexts, weeksWithData: weeks, selectedWeek: week });
+  it('"Largest overall" (default) orders by filtered total, then canonical order; every group in view is listed', () => {
+    const cards = groupCards({ ...base, selectedWeek: weeks[weeks.length - 5] });
+    const groupsInView = new Set(Array.from(labels).filter(l => l >= 0));
+    expect(cards).toHaveLength(groupsInView.size);
+    for (let i = 1; i < cards.length; i++) {
+      const [a, b] = [cards[i - 1], cards[i]];
+      expect(a.total > b.total || (a.total === b.total && canonical(a, b))).toBe(true);
+    }
+    for (const c of cards) expect(c.total).toBe(c.sparkline.reduce((x, y) => x + y, 0));
+  });
+
+  it('"Most incidents in selected week" orders by week count, then total, then canonical order', () => {
+    for (const week of weeks.slice(5, 30)) {
+      const cards = groupCards({ ...base, selectedWeek: week, sort: 'selectedWeek' });
       for (let i = 1; i < cards.length; i++) {
         const [a, b] = [cards[i - 1], cards[i]];
-        expect(a.count > b.count || (a.count === b.count && (a.size > b.size || (a.size === b.size && identity.rank.get(a.label)! < identity.rank.get(b.label)!)))).toBe(true);
+        expect(a.count > b.count || (a.count === b.count && (a.total > b.total || (a.total === b.total && canonical(a, b))))).toBe(true);
       }
-      for (const c of cards) {
-        expect(c.count).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('ordering follows the filtered population', () => {
+    const months = [...new Set(incidents.map(i => i.Opened.slice(0, 7)))].sort().slice(0, 6);
+    const view = filterIncidents(incidents, { months, services: ALL_VALUES, serviceOfferings: ALL_VALUES });
+    const cards = groupCards({ ...base, view, selectedWeek: weeks[weeks.length - 1] });
+    for (const c of cards) expect(c.total).toBe(view.filter(i => labels[incidents.indexOf(i)] === c.label).length);
+    for (let i = 1; i < cards.length; i++) expect(cards[i - 1].total).toBeGreaterThanOrEqual(cards[i].total);
+  });
+
+  it('a fully covered week keeps typical, delta, percentage and "New this period"; sparkline spans every calendar week', () => {
+    let checkedNew = false;
+    let checkedDelta = false;
+    for (const week of weeks.slice(5, -1)) {
+      expect(isWeekComparable(week, throughDate)).toBe(true);
+      for (const c of groupCards({ ...base, selectedWeek: week })) {
+        expect(c.comparable).toBe(true);
         expect(c.sparkline).toHaveLength(calendar.length);
         expect(c.sparkline[calendar.indexOf(week)]).toBe(c.count);
-        expect(c.totalWeeks).toBe(calendar.length);
-        if (c.typical === 0) {
+        if (c.typical === 0 && c.count > 0) {
           expect(c.newThisPeriod).toBe(true);
-          expect(factLine(c)).toBe(`${c.count} this week · New this period`);
-          expect(c.pct).toBeNull();
+          expect(factLine(c, throughDate)).toBe(`${c.count} this week · New this period`);
           checkedNew = true;
+        }
+        if (c.typical !== null && c.typical > 0) {
+          expect(c.pct).toBe(Math.round(((c.count - c.typical) / c.typical) * 100));
+          expect(factLine(c, throughDate)).toMatch(/· typical [\d.]+ · [+−±]/);
+          checkedDelta = true;
         }
       }
     }
-    expect(checkedNew).toBe(true);
+    expect(checkedNew && checkedDelta).toBe(true);
+  });
+
+  it('the Data-through week, when not fully covered, shows only the count — never a comparison', () => {
+    const last = weeks[weeks.length - 1];
+    expect(throughDate < weekEndDate(last)).toBe(true);
+    const cards = groupCards({ ...base, selectedWeek: last, sort: 'selectedWeek' });
+    for (const c of cards) {
+      expect(c.comparable).toBe(false);
+      expect(c.typical).toBeNull();
+      expect(c.change).toBeNull();
+      expect(c.pct).toBeNull();
+      expect(c.newThisPeriod).toBe(false);
+      const line = factLine(c, throughDate);
+      expect(line).toBe(`${c.count} ${c.count === 1 ? 'incident' : 'incidents'} through ${shortDate(throughDate)}`);
+      expect(line).not.toMatch(/typical|New this period|[+−±]/);
+    }
   });
 
   it('sparklines include empty weeks as zeros', () => {
     expect(calendar.length).toBeGreaterThan(weeks.length - 1);
-    const cards = weeks.flatMap(week => groupCards({ incidents, view: incidents, labels, identity, texts: gtexts, weeksWithData: weeks, selectedWeek: week }));
-    expect(cards.length).toBeGreaterThan(0);
+    const cards = groupCards({ ...base, selectedWeek: weeks[weeks.length - 1] });
     expect(cards.some(c => c.sparkline.includes(0))).toBe(true);
   });
 
   it('fact line: typical with one decimal only when needed, neutral delta', () => {
-    expect(factLine({ count: 14, typical: 9, change: 5, newThisPeriod: false })).toBe('14 this week · typical 9 · +5');
-    expect(factLine({ count: 2, typical: 2.4, change: -0.4, newThisPeriod: false })).toBe('2 this week · typical 2.4 · −0.4');
-    expect(factLine({ count: 3, typical: 3, change: 0, newThisPeriod: false })).toBe('3 this week · typical 3 · ±0');
+    const f = (count: number, typical: number) => factLine({ count, typical, change: count - typical, newThisPeriod: false, comparable: true });
+    expect(f(14, 9)).toBe('14 this week · typical 9 · +5');
+    expect(f(2, 2.4)).toBe('2 this week · typical 2.4 · −0.4');
+    expect(f(3, 3)).toBe('3 this week · typical 3 · ±0');
+  });
+});
+
+describe('week coverage', () => {
+  it('boundary: Data-through date equal to the ISO Sunday allows comparison; earlier suppresses it', () => {
+    expect(weekEndDate('2026-W40')).toBe('2026-10-04');
+    expect(isWeekComparable('2026-W40', '2026-10-04')).toBe(true);
+    expect(isWeekComparable('2026-W40', '2026-10-03')).toBe(false);
+    expect(isWeekComparable('2026-W40', '2026-10-05')).toBe(true);
+  });
+
+  it('uses calendar dates regardless of time of day', () => {
+    // Late on the Sunday and the first minute of the Sunday give the same date.
+    expect(utcDateKey(new Date(Date.UTC(2026, 9, 4, 0, 0, 1)))).toBe('2026-10-04');
+    expect(utcDateKey(new Date(Date.UTC(2026, 9, 4, 23, 59, 59)))).toBe('2026-10-04');
+    expect(isWeekComparable('2026-W40', utcDateKey(new Date(Date.UTC(2026, 9, 4, 0, 0, 1))))).toBe(true);
+  });
+
+  it('labels the week option with the Data-through date only when the data ends inside it', () => {
+    expect(weekOptionText('2026-W40', '2026-09-30')).toBe('Sep 28 – Oct 4 · data through Sep 30');
+    expect(weekOptionText('2026-W39', '2026-09-30')).toBe('Sep 21 – Sep 27');
+    expect(weekMonthLabel('2026-W01')).toBe('Jan 2026');
+    expect(weekMonthLabel('2026-W40')).toBe('Oct 2026');
+  });
+});
+
+describe('concentration', () => {
+  const identity = groupIdentity(incidents, labels);
+  const gtexts = groupTexts(incidents, docs, labels);
+  const throughDate = utcDateKey(dataThrough(incidents)!);
+  const months = [...new Set(incidents.map(i => i.Opened.slice(0, 7)))].sort().slice(3, 8);
+  const service = String(incidents[0].extraFields?.Service ?? '');
+  const views = [
+    incidents,
+    filterIncidents(incidents, { months, services: ALL_VALUES, serviceOfferings: ALL_VALUES }),
+    filterIncidents(incidents, { months: [], services: { values: [service], includeMissing: false }, serviceOfferings: ALL_VALUES }),
+  ];
+
+  it('top five groups of the active population over that same population', () => {
+    for (const view of views) {
+      const cards = groupCards({ incidents, view, labels, identity, texts: gtexts, weeksWithData: weeks, selectedWeek: weeks[weeks.length - 1], dataThroughDate: throughDate });
+      const c = concentration(cards, view.length);
+      const totals = new Map<number, number>();
+      for (const inc of view) {
+        const l = labels[incidents.indexOf(inc)];
+        if (l >= 0) totals.set(l, (totals.get(l) ?? 0) + 1);
+      }
+      const top = [...totals.values()].sort((a, b) => b - a).slice(0, 5);
+      expect(c.groups).toBe(top.length);
+      expect(c.incidents).toBe(top.reduce((a, b) => a + b, 0));
+      expect(c.population).toBe(view.length);
+      expect(c.incidents).toBeLessThanOrEqual(c.population);
+      expect(c.pct).toBe(Math.round((c.incidents / view.length) * 100));
+    }
+  });
+
+  it('uses all groups when there are fewer than five', () => {
+    const c = concentration([{ total: 4 }, { total: 2 }, { total: 1 }], 20);
+    expect(c).toEqual({ groups: 3, incidents: 7, population: 20, pct: 35 });
+    expect(concentrationLead(c)).toBe('The 3 repeating groups account for');
+    expect(concentrationLead(concentration([{ total: 9 }, { total: 8 }, { total: 7 }, { total: 6 }, { total: 5 }, { total: 4 }], 50)))
+      .toBe('The 5 largest repeating groups account for');
+    expect(concentrationLead(concentration([{ total: 4 }], 10))).toBe('The only repeating group accounts for');
+  });
+});
+
+describe('display cleanup', () => {
+  it('tidies only the displayed name; the tooltip keeps the original text', () => {
+    const inc = { shortDescClean: 'Host name.....node12  JOB_KILN_AMBER failed!!! ==== retry', descClean: '' };
+    const before = JSON.stringify(inc);
+    const name = groupName(inc);
+    expect(name.short).toBe('Example: Host name…node12 JOB KILN AMBER failed! = retry');
+    expect(name.full).toBe('Example: Host name.....node12  JOB_KILN_AMBER failed!!! ==== retry');
+    expect(JSON.stringify(inc)).toBe(before);
+    expect(displayText('a_b  c...d (x)')).toBe('a b c…d (x)');
+  });
+
+  it('never reaches the grouping input', () => {
+    const t = ['JOB_KILN_AMBER failed.....now', 'x y z'];
+    expect(buildVariant(t, { variant: 'R0' })[0]).toBe('job_kiln_amber failed.....now');
+  });
+});
+
+describe('sparkline geometry', () => {
+  it('keeps zero at zero, makes any non-zero week visible, and leaves the data untouched', () => {
+    const series = [0, 1, 0, 40, 2];
+    const copy = series.slice();
+    const h = sparklineHeights(series, 28, 3);
+    expect(h[0]).toBe(0);
+    expect(h[2]).toBe(0);
+    expect(h[1]).toBeGreaterThanOrEqual(3);
+    expect(h[4]).toBeGreaterThanOrEqual(3);
+    expect(h[3]).toBe(28);
+    expect(series).toEqual(copy);
+  });
+});
+
+describe('exploratory defaults', () => {
+  it('opens with Remove repeated templates (R1, τ 0.05), a registered configuration', () => {
+    expect(FAMILIES_DISPLAY.defaultVariant).toBe('R1');
+    expect(FAMILIES_DISPLAY.defaultTau).toBe(0.05);
+    expect(FAMILIES_RESEARCH.variants).toEqual(['R0', 'R1', 'R2']);
+    expect([...FAMILIES_RESEARCH.taus]).toEqual([0.02, 0.05, 0.10]);
+    expect([...FAMILIES_RESEARCH.thresholds]).toEqual([0.5, 0.6, 0.7, 0.8]);
+    expect(FAMILIES_RESEARCH.taus).toContain(FAMILIES_DISPLAY.defaultTau);
   });
 });
 

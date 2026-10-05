@@ -44,6 +44,42 @@ export function weekRangeText(key: string): string {
   return `${monthDay(start)} – ${monthDay(new Date(start.getTime() + 6 * 86400000))}`;
 }
 
+// ---------------------------------------------------------------------------
+// Coverage: which weeks the file's data fully covers
+// ---------------------------------------------------------------------------
+
+/** UTC calendar date "YYYY-MM-DD" of a timestamp, as week bucketing reads it. */
+export function utcDateKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Calendar date of the ISO week's Sunday, "YYYY-MM-DD". */
+export function weekEndDate(key: string): string {
+  const start = weekStart(key);
+  return start ? utcDateKey(new Date(start.getTime() + 6 * 86400000)) : '';
+}
+
+/** "Sep 30" for a "YYYY-MM-DD" calendar date. */
+export function shortDate(dateKey: string): string {
+  return monthDay(new Date(`${dateKey}T00:00:00Z`));
+}
+
+/**
+ * A week is compared with typical only when the file's data reaches its
+ * Sunday: `dataThroughDate >= weekEndDate`, by calendar date. Nothing is
+ * inferred about incidents after the Data-through date.
+ */
+export function isWeekComparable(week: string, dataThroughDate: string): boolean {
+  return !!dataThroughDate && dataThroughDate >= weekEndDate(week);
+}
+
+/** Week selector label: the ISO range, plus "data through <date>" when the data ends inside the week. */
+export function weekOptionText(week: string, dataThroughDate: string): string {
+  return isWeekComparable(week, dataThroughDate)
+    ? weekRangeText(week)
+    : `${weekRangeText(week)} · data through ${shortDate(dataThroughDate)}`;
+}
+
 /** "3", "2.5" — one decimal only when not a whole number. */
 export function typicalText(typical: number): string {
   const rounded = Math.round(typical * 10) / 10;
@@ -197,13 +233,28 @@ export function groupTexts(incidents: Incident[], docs: string[], labels: Int32A
   return out;
 }
 
-/** "Example: …" name of a group from its representative incident; full text for the tooltip. */
+/**
+ * Display-only tidying of an example text: underscores become spaces, runs of
+ * dots become "…", other repeated punctuation collapses to one character,
+ * whitespace collapses. Never fed back into grouping or stored.
+ */
+export function displayText(text: string): string {
+  return text
+    .replace(/_/g, ' ')
+    .replace(/\.{2,}/g, '…')
+    .replace(/([!?,;:=*#~-])\1+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** "Example: …" name of a group from its representative incident; the original text for the tooltip. */
 export function groupName(incident: Pick<Incident, 'shortDescClean' | 'descClean'>): { short: string; full: string } {
   const max = FAMILIES_DISPLAY.nameMaxChars;
-  const source = incident.shortDescClean.trim() || incident.descClean.replace(/\s+/g, ' ').trim();
-  if (!source) return { short: 'Group without text', full: 'Group without text' };
-  const short = source.length > max ? `${source.slice(0, max).trimEnd()}…` : source;
-  return { short: `Example: ${short}`, full: `Example: ${source}` };
+  const original = incident.shortDescClean.trim() || incident.descClean.replace(/\s+/g, ' ').trim();
+  const shown = displayText(original);
+  if (!shown) return { short: 'Group without text', full: 'Group without text' };
+  const short = shown.length > max ? `${shown.slice(0, max).trimEnd()}…` : shown;
+  return { short: `Example: ${short}`, full: `Example: ${original}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -245,24 +296,29 @@ export function topShare(values: (string | null)[]): TopShare {
 // Group cards
 // ---------------------------------------------------------------------------
 
+export type GroupSort = 'largest' | 'selectedWeek';
+
 export interface GroupCard {
   label: number;
   id: string;
   name: { short: string; full: string };
-  /** Incidents in the selected week (displayed population). */
+  /** Incidents of the group in the active filtered population, all weeks. */
+  total: number;
+  /** Incidents in the selected week (active filtered population). */
   count: number;
-  /** null when the selected week has no baseline weeks. */
+  /** The selected week is fully covered by the file's data. */
+  comparable: boolean;
+  /** null when the week is not comparable or has no baseline weeks. */
   typical: number | null;
   change: number | null;
   /** Percent change, only when typical > 0. */
   pct: number | null;
   newThisPeriod: boolean;
-  /** Weekly counts over every calendar week of the file (displayed population). */
+  /** Weekly counts over every calendar week of the file (active filtered population). */
   sparkline: number[];
   handledBy: TopShare;
   service: TopShare;
-  /** All members of the group in the file. */
-  size: number;
+  /** Distinct weeks with incidents of the group (active filtered population). */
   weeksAppeared: number;
   totalWeeks: number;
 }
@@ -276,9 +332,17 @@ export interface GroupContext {
   /** Weeks with data in the full file (Weekly Review's baseline list). */
   weeksWithData: string[];
   selectedWeek: string;
+  /** Calendar date of the latest Opened in the full file, "YYYY-MM-DD". */
+  dataThroughDate: string;
+  sort?: GroupSort;
 }
 
-export function groupCards({ incidents, view, labels, identity, texts, weeksWithData, selectedWeek }: GroupContext): GroupCard[] {
+/**
+ * Every group with incidents in the active filtered population. "largest"
+ * orders by that total; "selectedWeek" by the selected week's count, then the
+ * total. Ties fall back to the canonical group order. Descriptive orderings only.
+ */
+export function groupCards({ incidents, view, labels, identity, texts, weeksWithData, selectedWeek, dataThroughDate, sort = 'largest' }: GroupContext): GroupCard[] {
   const calendar = calendarWeeks(weeksWithData);
   const col = new Map(calendar.map((w, i) => [w, i]));
   const rowOf = new Map<Incident, number>();
@@ -298,40 +362,95 @@ export function groupCards({ incidents, view, labels, identity, texts, weeksWith
     if (!series) viewWeekly.set(l, (series = new Array(calendar.length).fill(0)));
     series[col.get(inc.week)!]++;
   }
+  const comparable = isWeekComparable(selectedWeek, dataThroughDate);
   const baseline = baselineWeeksFor(weeksWithData, selectedWeek);
   const cards: GroupCard[] = [];
   for (const [label, series] of viewWeekly) {
     const count = col.has(selectedWeek) ? series[col.get(selectedWeek)!] : 0;
-    if (count === 0) continue;
     const members = all.get(label)!;
-    const typical = baseline.length ? baseline.reduce((s, w) => s + series[col.get(w)!], 0) / baseline.length : null;
+    const typical = comparable && baseline.length ? baseline.reduce((s, w) => s + series[col.get(w)!], 0) / baseline.length : null;
     const change = typical === null ? null : count - typical;
     cards.push({
       label,
       id: identity.ids.get(label)!,
       name: groupName(incidents[texts.get(label)!.representative]),
-      count, typical, change,
+      total: series.reduce((a, b) => a + b, 0),
+      count, comparable, typical, change,
       pct: typical !== null && typical > 0 ? Math.round((change! / typical) * 100) : null,
-      newThisPeriod: typical === 0,
+      newThisPeriod: typical === 0 && count > 0,
       sparkline: series,
       handledBy: topShare(members.map(i => dimensionValue(incidents[i], 'assignmentGroup'))),
       service: topShare(members.map(i => dimensionValue(incidents[i], 'service'))),
-      size: members.length,
-      weeksAppeared: new Set(members.map(i => incidents[i].week).filter(Boolean)).size,
+      weeksAppeared: series.filter(v => v > 0).length,
       totalWeeks: calendar.length,
     });
   }
-  return cards.sort((a, b) => b.count - a.count || b.size - a.size || identity.rank.get(a.label)! - identity.rank.get(b.label)!);
+  const canonical = (a: GroupCard, b: GroupCard) => identity.rank.get(a.label)! - identity.rank.get(b.label)!;
+  return cards.sort(sort === 'selectedWeek'
+    ? (a, b) => b.count - a.count || b.total - a.total || canonical(a, b)
+    : (a, b) => b.total - a.total || canonical(a, b));
 }
 
-/** "14 this week · typical 9 · +5" pieces, or "New this period". */
-export function factLine(card: Pick<GroupCard, 'count' | 'typical' | 'change' | 'newThisPeriod'>): string {
+/**
+ * The selected week's fact line. Comparable weeks: "14 this week · typical 9 · +5"
+ * or "… · New this period". A week the data does not fully cover: only the
+ * count, "3 incidents through Sep 30" — never a comparison.
+ */
+export function factLine(card: Pick<GroupCard, 'count' | 'typical' | 'change' | 'newThisPeriod' | 'comparable'>, dataThroughDate = ''): string {
+  if (!card.comparable) return `${formatCount(card.count)} ${card.count === 1 ? 'incident' : 'incidents'} through ${shortDate(dataThroughDate)}`;
   const head = `${formatCount(card.count)} this week`;
   if (card.newThisPeriod) return `${head} · New this period`;
   if (card.typical === null) return `${head} · no earlier weeks to compare`;
   const rounded = Math.round(card.change! * 10) / 10;
   const delta = rounded === 0 ? '±0' : `${rounded > 0 ? '+' : '−'}${typicalText(Math.abs(rounded))}`;
   return `${head} · typical ${typicalText(card.typical)} · ${delta}`;
+}
+
+// ---------------------------------------------------------------------------
+// Concentration
+// ---------------------------------------------------------------------------
+
+export interface Concentration {
+  /** Groups counted: up to 5, the largest in the active filtered population. */
+  groups: number;
+  /** Their incidents in the active filtered population. */
+  incidents: number;
+  /** All incidents in the active filtered population (grouped + one-off). */
+  population: number;
+  pct: number;
+}
+
+/** Share of the active filtered population in its largest groups (numerator and denominator from the same population). */
+export function concentration(cards: Pick<GroupCard, 'total'>[], population: number, top = FAMILIES_DISPLAY.concentrationTop): Concentration {
+  const largest = cards.map(c => c.total).sort((a, b) => b - a).slice(0, top);
+  const incidents = largest.reduce((a, b) => a + b, 0);
+  return { groups: largest.length, incidents, population, pct: wholePct(incidents, population) };
+}
+
+/** "The 5 largest repeating groups account for" / "The 3 repeating groups account for" / "The only repeating group accounts for". */
+export function concentrationLead(c: Concentration, top = FAMILIES_DISPLAY.concentrationTop): string {
+  if (c.groups === 1) return 'The only repeating group accounts for';
+  return c.groups >= top ? `The ${c.groups} largest repeating groups account for` : `The ${c.groups} repeating groups account for`;
+}
+
+// ---------------------------------------------------------------------------
+// Sparkline geometry (presentation only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bar heights for a sparkline. Zero stays zero; any non-zero week is at least
+ * `minHeight` tall so a single incident is visible. Heights are drawing only:
+ * labels and tooltips always use the true counts.
+ */
+export function sparklineHeights(series: number[], height: number, minHeight: number): number[] {
+  const max = Math.max(1, ...series);
+  return series.map(v => (v === 0 ? 0 : Math.max(minHeight, (v / max) * height)));
+}
+
+/** "Jan 2026": the month of the ISO week's Thursday, the day that decides which year and month the week belongs to. */
+export function weekMonthLabel(key: string): string {
+  const start = weekStart(key);
+  return start ? new Date(start.getTime() + 3 * 86400000).toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
 }
 
 /** Incidents of one group or the one-off incidents, in the displayed population, newest first. */

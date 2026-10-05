@@ -3,7 +3,6 @@ import { useAppContext } from '@/context/AppContext';
 import GlobalFilters from '@/components/GlobalFilters';
 import { EmptyState } from '@/components/ui/dashboard-primitives';
 import { FAMILIES_COPY, FAMILIES_DISPLAY, FAMILIES_RESEARCH, familiesEnabled } from '@/config/families';
-import { WEEKLY_COPY } from '@/config/weekly';
 import { useIncidentFamilies } from '@/hooks/useIncidentFamilies';
 import { weekLabel } from '@/lib/periods';
 import { dimensionValue } from '@/lib/serviceDimension';
@@ -11,8 +10,9 @@ import { dataThrough, formatDataThrough } from '@/lib/weeklyComposition';
 import { thresholdRow } from '@/lib/families/view';
 import { buildVariant, openTimeText, type TextVariant } from '@/lib/families/variants';
 import {
-  breakdown, calendarWeeks, factLine, formatCount, groupCards, groupIdentity, groupTexts,
-  membersNewestFirst, weekRangeText, weekSummary, wholePct, type GroupCard, type TopShare,
+  breakdown, calendarWeeks, concentration, concentrationLead, factLine, formatCount, groupCards, groupIdentity,
+  groupTexts, isWeekComparable, membersNewestFirst, shortDate, sparklineHeights, utcDateKey, weekMonthLabel,
+  weekOptionText, weekRangeText, weekSummary, wholePct, type GroupCard, type GroupSort, type TopShare,
 } from '@/lib/families/presentation';
 import type { AnnotatedIncident } from '@/lib/problems';
 import { BarChart, Bar, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -30,20 +30,38 @@ function shareText(share: TopShare, missing: string): string {
   return `${share.value} (${share.pct}%)${share.mixed ? ` · ${FAMILIES_COPY.mixed}` : ''}`;
 }
 
-/** Weekly counts as small bars; the selected week in the accent colour. */
-function Sparkline({ series, selected }: { series: number[]; selected: number }) {
-  const max = Math.max(1, ...series);
+/**
+ * Weekly counts as small bars. The selected week is drawn in the accent
+ * colour; a week the data does not fully cover is drawn hollow. Each bar's
+ * tooltip gives the true count; the minimum bar height is drawing only.
+ */
+function Sparkline({ series, calendar, selected, dataThroughDate }: { series: number[]; calendar: string[]; selected: number; dataThroughDate: string }) {
+  const h = FAMILIES_DISPLAY.sparklineHeight;
+  const heights = sparklineHeights(series, h, FAMILIES_DISPLAY.sparklineMinBar);
   const w = 3;
   const gap = 1;
-  const h = 24;
+  const width = series.length * (w + gap);
   return (
-    <svg viewBox={`0 0 ${series.length * (w + gap)} ${h}`} preserveAspectRatio="none" height={h} style={{ width: '100%', maxWidth: series.length * (w + gap) }}
-      role="img" aria-label="Incidents per week" data-testid="sparkline" data-weeks={series.length}>
-      {series.map((v, i) => {
-        const bh = v === 0 ? 1 : Math.max(2, (v / max) * h);
-        return <rect key={i} x={i * (w + gap)} y={h - bh} width={w} height={bh} fill={i === selected ? ACCENT : NEUTRAL} />;
-      })}
-    </svg>
+    <div className="min-w-0" style={{ maxWidth: width }}>
+      <svg viewBox={`0 0 ${width} ${h + 1}`} preserveAspectRatio="none" height={h + 1} style={{ width: '100%' }}
+        role="img" aria-label="Incidents per week" data-testid="sparkline" data-weeks={series.length}>
+        <line x1={0} x2={width} y1={h + 0.5} y2={h + 0.5} stroke={NEUTRAL} strokeWidth={0.5} />
+        {series.map((v, i) => {
+          const covered = isWeekComparable(calendar[i], dataThroughDate);
+          const color = i === selected ? ACCENT : NEUTRAL;
+          return (
+            <rect key={i} x={i * (w + gap)} y={h - heights[i]} width={w} height={heights[i]} data-count={v}
+              fill={covered ? color : 'none'} stroke={covered ? 'none' : color} strokeWidth={covered ? 0 : 0.8}>
+              <title>{`${weekRangeText(calendar[i])}: ${v} ${v === 1 ? 'incident' : 'incidents'}${covered ? '' : ` · data through ${shortDate(dataThroughDate)}`}`}</title>
+            </rect>
+          );
+        })}
+      </svg>
+      <div className="flex justify-between text-[10px] text-card-foreground/45 mt-0.5" data-testid="sparkline-months">
+        <span>{weekMonthLabel(calendar[0])}</span>
+        <span>{weekMonthLabel(calendar[calendar.length - 1])}</span>
+      </div>
+    </div>
   );
 }
 
@@ -64,10 +82,11 @@ function IncidentLine({ inc }: { inc: AnnotatedIncident }) {
 }
 
 export default function FamiliesPage() {
-  const { incidents, filteredIncidents, availableWeeks: weeks, selectedWeek, setSelectedWeek } = useAppContext();
+  const { incidents, filteredIncidents, availableWeeks: weeks, selectedWeek, setSelectedWeek, globalFilters } = useAppContext();
   const [strictness, setStrictness] = useState<Strictness>('balanced');
   const [variant, setVariant] = useState<TextVariant>(FAMILIES_DISPLAY.defaultVariant);
   const [tau, setTau] = useState<number>(FAMILIES_DISPLAY.defaultTau);
+  const [sort, setSort] = useState<GroupSort>('largest');
   const [showAll, setShowAll] = useState(false);
   const [openGroup, setOpenGroup] = useState<number | null>(null);
   const [oneOffOpen, setOneOffOpen] = useState(false);
@@ -76,7 +95,14 @@ export default function FamiliesPage() {
 
   // Groups are built once over the full loaded file; filters never reach the computation.
   const groups = useIncidentFamilies(incidents, variant, tau);
+  // Coverage comes from the full file: filters never change it.
   const through = useMemo(() => dataThrough(incidents), [incidents]);
+  const throughDate = through ? utcDateKey(through) : '';
+  const firstOpened = useMemo(() => {
+    let first = '';
+    for (const i of incidents) if (i.Opened && (!first || i.Opened < first)) first = i.Opened;
+    return first;
+  }, [incidents]);
   const threshold = FAMILIES_DISPLAY.strictness[strictness];
   const ready = groups.status === 'ready' ? groups : null;
   const labels = ready ? ready.partitions.labels[ready.partitions.thresholds.indexOf(threshold)] : null;
@@ -90,11 +116,15 @@ export default function FamiliesPage() {
   const texts = useMemo(() => (labels && docs ? groupTexts(incidents, docs, labels) : null), [incidents, docs, labels]);
   const summary = useMemo(() => (labels ? weekSummary(incidents, filteredIncidents, labels, selectedWeek) : null), [incidents, filteredIncidents, labels, selectedWeek]);
   const cards = useMemo(
-    () => (labels && identity && texts ? groupCards({ incidents, view: filteredIncidents, labels, identity, texts, weeksWithData: weeks, selectedWeek }) : []),
-    [incidents, filteredIncidents, labels, identity, texts, weeks, selectedWeek],
+    () => (labels && identity && texts
+      ? groupCards({ incidents, view: filteredIncidents, labels, identity, texts, weeksWithData: weeks, selectedWeek, dataThroughDate: throughDate, sort })
+      : []),
+    [incidents, filteredIncidents, labels, identity, texts, weeks, selectedWeek, throughDate, sort],
   );
+  const conc = useMemo(() => concentration(cards, filteredIncidents.length), [cards, filteredIncidents]);
   const calendar = useMemo(() => calendarWeeks(weeks), [weeks]);
   const selectedIndex = calendar.indexOf(selectedWeek);
+  const comparable = isWeekComparable(selectedWeek, throughDate);
   const oneOffs = useMemo(
     () => (labels && oneOffOpen ? membersNewestFirst(incidents, filteredIncidents, labels, 'one-off', selectedWeek) : []),
     [incidents, filteredIncidents, labels, oneOffOpen, selectedWeek],
@@ -108,6 +138,8 @@ export default function FamiliesPage() {
 
   const visibleCards = showAll ? cards : cards.slice(0, FAMILIES_DISPLAY.topCards);
   const detailCard = openGroup !== null ? cards.find(c => c.label === openGroup) ?? null : null;
+  const isExploratoryDefault = variant === FAMILIES_DISPLAY.defaultVariant && tau === FAMILIES_DISPLAY.defaultTau && strictness === 'balanced';
+  const timeFiltered = (globalFilters?.months?.length ?? 0) > 0;
 
   return (
     <div className="max-w-6xl min-w-0 break-words">
@@ -138,20 +170,18 @@ export default function FamiliesPage() {
               <label className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
                 <span className={labelClass}>Week of</span>
                 <select aria-label="Week" value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)} className={`${selectClass} max-w-full min-w-0`}>
-                  {[...weeks].reverse().map(w => <option key={w} value={w}>{weekRangeText(w)}</option>)}
+                  {[...weeks].reverse().map(w => <option key={w} value={w}>{weekOptionText(w, throughDate)}</option>)}
                 </select>
               </label>
-              {through && (
-                <span className="text-[12px] text-card-foreground/60" data-testid="data-through" title={WEEKLY_COPY.dataThroughCaveat}>
-                  Data through {formatDataThrough(through)}
-                </span>
-              )}
+              {through && <span className="text-[12px] text-card-foreground/60" data-testid="data-through">Data through {formatDataThrough(through)}</span>}
             </div>
             <div className="font-mono text-[11px] uppercase tracking-wider text-card-foreground/50 break-words" data-testid="week-label">Week of {weekRangeText(selectedWeek)}</div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3">
               <div>
                 <div className="font-mono text-[28px] font-bold text-card-foreground leading-none" data-testid="kpi-total">{formatCount(summary.total)}</div>
-                <div className="text-[12px] text-card-foreground/60 mt-1">incidents</div>
+                <div className="text-[12px] text-card-foreground/60 mt-1" data-testid="kpi-total-label">
+                  {comparable ? 'incidents' : `incidents through ${shortDate(throughDate)}`}
+                </div>
               </div>
               <div>
                 <div className="font-mono text-[22px] font-bold text-card-foreground leading-none">{wholePct(summary.grouped, summary.total)}%</div>
@@ -164,23 +194,37 @@ export default function FamiliesPage() {
                 <div className="text-[12px] text-card-foreground/60" data-testid="kpi-one-off">{formatCount(summary.oneOff)} incidents</div>
               </div>
             </div>
+            {!comparable && through && (
+              <p className="text-[12px] text-card-foreground/70 mt-4" data-testid="coverage-message">{FAMILIES_COPY.coverageMessage(shortDate(throughDate))}</p>
+            )}
           </div>
 
+          {/* Concentration */}
+          {conc.groups > 0 && (
+            <p className="text-[14px] text-foreground mb-2" data-testid="concentration">
+              {concentrationLead(conc)} <strong>{conc.pct}%</strong> of incidents {timeFiltered ? 'in the selected period' : `since ${formatDataThrough(new Date(`${firstOpened.slice(0, 10)}T00:00:00Z`))}`}.
+            </p>
+          )}
+
           {/* Cards */}
-          {/* Same look as SectionTitle, but allowed to wrap on narrow screens. */}
-          <div className="flex items-center gap-3 mb-4 mt-8">
+          <div className="flex flex-wrap items-center gap-3 mb-4 mt-6">
             <h2 className="font-mono text-[11px] font-bold tracking-[0.14em] uppercase text-muted-foreground">{FAMILIES_COPY.cardsTitle}</h2>
             <span className="flex-1 h-px bg-border min-w-4" />
+            <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+              {FAMILIES_COPY.sortLabel}
+              <select aria-label="Sort by" value={sort} onChange={e => setSort(e.target.value as GroupSort)} className={selectClass}>
+                <option value="largest">{FAMILIES_COPY.sortLabels.largest}</option>
+                <option value="selectedWeek">{FAMILIES_COPY.sortLabels.selectedWeek}</option>
+              </select>
+            </label>
           </div>
-          {summary.total === 0 ? (
-            <EmptyState message={FAMILIES_COPY.noIncidentsThisWeek} />
-          ) : cards.length === 0 ? (
+          {cards.length === 0 ? (
             <EmptyState message={FAMILIES_COPY.noGroupsThisWeek} />
           ) : (
             <>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" data-testid="group-cards">
                 {visibleCards.map(card => (
-                  <GroupCardView key={card.label} card={card} selectedIndex={selectedIndex} onOpen={() => setOpenGroup(card.label)} />
+                  <GroupCardView key={card.label} card={card} calendar={calendar} selectedIndex={selectedIndex} throughDate={throughDate} onOpen={() => setOpenGroup(card.label)} />
                 ))}
               </div>
               {cards.length > FAMILIES_DISPLAY.topCards && (
@@ -211,6 +255,7 @@ export default function FamiliesPage() {
             </button>
             {settingsOpen && (
               <div className="px-5 pb-5 space-y-5 text-card-foreground" data-testid="settings-body">
+                {isExploratoryDefault && <p className="text-[12px] text-card-foreground/70" data-testid="exploratory-default">{FAMILIES_COPY.exploratoryDefault}</p>}
                 <fieldset>
                   <legend className="text-[13px] font-medium mb-2">{FAMILIES_COPY.strictnessQuestion}</legend>
                   <div className="flex flex-wrap gap-2">
@@ -236,8 +281,8 @@ export default function FamiliesPage() {
                   </button>
                   {advancedOpen && (
                     <div className="mt-3 space-y-4" data-testid="advanced-panel">
-                      <label className="flex items-center gap-2 text-[12px]">
-                        Template frequency level (for “Remove repeated templates” and “Remove templates and IDs”)
+                      <label className="flex flex-wrap items-center gap-2 text-[12px]">
+                        Template frequency level (for “{FAMILIES_COPY.textCleaningLabels.R1}” and “{FAMILIES_COPY.textCleaningLabels.R2}”)
                         <select aria-label="Template frequency level" value={tau} onChange={e => { setTau(Number(e.target.value)); setOpenGroup(null); }} className={selectClass}>
                           {FAMILIES_RESEARCH.taus.map(t => <option key={t} value={t}>{t.toFixed(2)}</option>)}
                         </select>
@@ -274,6 +319,7 @@ export default function FamiliesPage() {
               words={texts.get(detailCard.label)!.commonWords}
               calendar={calendar}
               selectedIndex={selectedIndex}
+              throughDate={throughDate}
               allMembers={incidents.filter((_, i) => labels[i] === detailCard.label)}
               members={membersNewestFirst(incidents, filteredIncidents, labels, detailCard.label)}
               onClose={() => setOpenGroup(null)}
@@ -285,7 +331,9 @@ export default function FamiliesPage() {
   );
 }
 
-function GroupCardView({ card, selectedIndex, onOpen }: { card: GroupCard; selectedIndex: number; onOpen: () => void }) {
+function GroupCardView({ card, calendar, selectedIndex, throughDate, onOpen }: {
+  card: GroupCard; calendar: string[]; selectedIndex: number; throughDate: string; onOpen: () => void;
+}) {
   return (
     <div className="v1-card p-5 flex flex-col gap-3 min-w-0" data-testid="group-card">
       <div className="flex items-start justify-between gap-3">
@@ -293,37 +341,41 @@ function GroupCardView({ card, selectedIndex, onOpen }: { card: GroupCard; selec
         <span className="font-mono text-[10px] text-card-foreground/45 shrink-0">{card.id}</span>
       </div>
       <div className="font-mono text-[13px] text-card-foreground" data-testid="fact-line">
-        {factLine(card)}
-        {card.pct !== null && <span className="text-card-foreground/45 ml-1.5 text-[11px]">({card.pct > 0 ? '+' : ''}{card.pct}%)</span>}
+        {factLine(card, throughDate)}
+        {card.comparable && card.pct !== null && <span className="text-card-foreground/45 ml-1.5 text-[11px]">({card.pct > 0 ? '+' : ''}{card.pct}%)</span>}
       </div>
-      <Sparkline series={card.sparkline} selected={selectedIndex} />
+      <Sparkline series={card.sparkline} calendar={calendar} selected={selectedIndex} dataThroughDate={throughDate} />
       <div className="text-[12px] text-card-foreground/75 space-y-0.5">
         <div>Mostly handled by {shareText(card.handledBy, FAMILIES_COPY.noHandlingGroup)}</div>
         <div>Main service: {shareText(card.service, FAMILIES_COPY.noService)}</div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-card-foreground/60">
-        <span>{formatCount(card.size)} incidents · appeared in {card.weeksAppeared} of {card.totalWeeks} weeks</span>
+        <span data-testid="card-totals">{formatCount(card.total)} incidents · appeared in {card.weeksAppeared} of {card.totalWeeks} weeks</span>
         <button type="button" onClick={onOpen} className="text-card-foreground font-medium hover:underline">{FAMILIES_COPY.seeIncidents}</button>
       </div>
     </div>
   );
 }
 
-function GroupDetail({ card, words, calendar, selectedIndex, allMembers, members, onClose }: {
-  card: GroupCard; words: string[]; calendar: string[]; selectedIndex: number;
+function GroupDetail({ card, words, calendar, selectedIndex, throughDate, allMembers, members, onClose }: {
+  card: GroupCard; words: string[]; calendar: string[]; selectedIndex: number; throughDate: string;
   allMembers: AnnotatedIncident[]; members: AnnotatedIncident[]; onClose: () => void;
 }) {
   const handled = breakdown(allMembers.map(m => dimensionValue(m, 'assignmentGroup')));
   const services = breakdown(allMembers.map(m => dimensionValue(m, 'service')));
-  const chart = calendar.map((w, i) => ({ week: weekLabel(w), count: card.sparkline[i] }));
+  const chart = calendar.map((w, i) => ({
+    week: weekLabel(w),
+    count: card.sparkline[i],
+    covered: isWeekComparable(w, throughDate),
+  }));
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm" onClick={onClose}>
       <div className="v1-card w-full max-w-3xl max-h-[88vh] overflow-y-auto m-4 shadow-xl" onClick={e => e.stopPropagation()} data-testid="group-detail">
         <div className="flex items-start justify-between gap-3 p-5 border-b border-card-foreground/10">
           <div className="min-w-0">
-            <h2 className="text-[16px] font-bold text-card-foreground leading-snug break-words">{card.name.full}</h2>
-            <div className="font-mono text-[12px] text-card-foreground mt-1.5">{factLine(card)} <span className="text-card-foreground/45 ml-2">{card.id}</span></div>
-            <div className="text-[12px] text-card-foreground/60 mt-0.5">{formatCount(card.size)} incidents · appeared in {card.weeksAppeared} of {card.totalWeeks} weeks</div>
+            <h2 className="text-[16px] font-bold text-card-foreground leading-snug break-words" title={card.name.full}>{card.name.short}</h2>
+            <div className="font-mono text-[12px] text-card-foreground mt-1.5">{factLine(card, throughDate)} <span className="text-card-foreground/45 ml-2">{card.id}</span></div>
+            <div className="text-[12px] text-card-foreground/60 mt-0.5">{formatCount(card.total)} incidents · appeared in {card.weeksAppeared} of {card.totalWeeks} weeks</div>
           </div>
           <button onClick={onClose} aria-label="Close" className="text-card-foreground/50 hover:text-card-foreground p-1 shrink-0"><X className="w-5 h-5" /></button>
         </div>
@@ -333,13 +385,19 @@ function GroupDetail({ card, words, calendar, selectedIndex, allMembers, members
               <BarChart data={chart}>
                 <XAxis dataKey="week" tick={{ fontSize: 10, fill: 'hsl(215,12%,50%)' }} interval="preserveStartEnd" />
                 <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: 'hsl(215,12%,50%)' }} width={28} />
-                <Tooltip />
+                <Tooltip formatter={(value: number, _n, item) => [
+                  `${value} ${value === 1 ? 'incident' : 'incidents'}${item?.payload?.covered === false ? ` · data through ${shortDate(throughDate)}` : ''}`, 'Incidents',
+                ]} />
                 <Bar dataKey="count" name="Incidents">
-                  {chart.map((_, i) => <Cell key={i} fill={i === selectedIndex ? ACCENT : NEUTRAL} />)}
+                  {chart.map((c, i) => {
+                    const color = i === selectedIndex ? ACCENT : NEUTRAL;
+                    return <Cell key={i} fill={c.covered ? color : 'transparent'} stroke={c.covered ? undefined : color} strokeWidth={c.covered ? 0 : 1.5} />;
+                  })}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
+          {!card.comparable && <p className="text-[11px] text-card-foreground/55 -mt-4">Outlined bar: week with data through {shortDate(throughDate)}.</p>}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {[{ title: 'Handled by', rows: handled, missing: FAMILIES_COPY.noHandlingGroup }, { title: 'Service', rows: services, missing: FAMILIES_COPY.noService }].map(b => (
               <div key={b.title}>
@@ -369,4 +427,3 @@ function GroupDetail({ card, words, calendar, selectedIndex, allMembers, members
     </div>
   );
 }
-

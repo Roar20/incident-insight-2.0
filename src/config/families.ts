@@ -29,8 +29,12 @@ export const FAMILIES_COPY = {
   computing: 'Building groups…',
   numbersNotUnique: 'Incident numbers are not unique in this file; group IDs are stable only within this file.',
   newThisPeriod: 'New this period',
-  cardsTitle: 'Most active repeating groups this week',
-  noGroupsThisWeek: 'No repeating groups in this week with the current filters.',
+  cardsTitle: 'Largest repeating groups',
+  sortLabel: 'Sort by:',
+  sortLabels: { largest: 'Largest overall', selectedWeek: 'Most incidents in selected week' },
+  exploratoryDefault: 'Exploratory default — not a selected configuration.',
+  coverageMessage: (through: string) => `This file has data through ${through}. Comparison with typical is shown only for weeks fully covered by the data.`,
+  noGroupsThisWeek: 'No repeating groups with the current filters.',
   noIncidentsThisWeek: 'No incidents in this week with the current filters.',
   seeIncidents: 'See incidents →',
   showAll: (n: number) => `Show all ${n} groups`,
@@ -48,7 +52,7 @@ export const FAMILIES_COPY = {
   textCleaningLabels: {
     R0: 'Original text',
     R1: 'Remove repeated templates',
-    R2: 'Remove templates and IDs',
+    R2: 'Additional text normalization (experimental)',
   } as Record<TextVariant, string>,
   advanced: 'Advanced',
 } as const;
